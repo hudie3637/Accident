@@ -69,26 +69,21 @@ class Accident(data.Dataset):
             try:
                 cat_data = np.load(file_path, allow_pickle=True)
 
-                # 检查'x'键对应的数据是否为Timestamp类型
-                if isinstance(cat_data['x'][0], pd.Timestamp):
-                    print('yes')
-                    # 将Timestamp转换为自Unix纪元以来的纳秒数
-                    cat_data['x'] = cat_data['x'].view(np.int64)
-
-                # 确保'x'已经是整数类型
                 self.data['x_' + category] = cat_data['x']
-
-                if isinstance(cat_data['y'][0], pd.Timestamp):
-                    cat_data['y'] = cat_data['y'].view(np.int64)
                 self.data['y_' + category] = cat_data['y']
             except FileNotFoundError:
-                print(f"File not found: {file_path}")
+                print(f"文件未找到：{file_path}")
                 continue
 
-        self.scaler = StandardScaler(mean=self.data['x_train'][..., 0].mean(), std=self.data['x_train'][..., 0].std())
-        for category in ['train', 'val', 'test']:
-            self.data['x_' + category][..., 0] = self.scaler.transform(self.data['x_' + category][..., 0])
-        self.x, self.y = self.data['x_%s' % self.data_type], self.data['y_%s' % self.data_type]
+        # 计算 'x_train' 数据的均值和标准差
+        if 'x_train' in self.data:
+            # 计算 'x_train' 数据的均值和标准差
+            mean = self.data['x_train'][..., 0].mean()
+            std = self.data['x_train'][..., 0].std()
+            self.scaler = StandardScaler(mean=mean, std=std)
+            for category in ['train', 'val', 'test']:
+                self.data['x_' + category][..., 0] = self.scaler.transform(self.data['x_' + category][..., 0])
+            self.x, self.y = self.data['x_%s' % self.data_type], self.data['y_%s' % self.data_type]
     def __len__(self):
         return len(self.x)
 
