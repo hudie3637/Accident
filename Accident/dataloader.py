@@ -3,22 +3,9 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 import os
-print(os.getcwd())
 import argparse
 import numpy as np
-import os
 import pandas as pd
-
-data_fp = os.path.join('data', 'Chicago', '2016_traffic', 'Taxi_Trips.csv')
-print(f"Attempting to read file from: {data_fp}")
-# 确保使用正确的header参数，这里假设第一行是列标题
-data = pd.read_csv(data_fp)
-
-# 检查'Trip Start Timestamp'列是否存在，如果存在，将其转换为datetime类型
-if 'Trip Start Timestamp' in data.columns:
-    data['Trip Start Timestamp'] = pd.to_datetime(data['Trip Start Timestamp'])
-
-
 
 def generate_graph_seq2seq_io_data(
         df, x_offsets, y_offsets, add_time_in_day=False, add_day_in_week=False, scaler=None
@@ -38,6 +25,13 @@ def generate_graph_seq2seq_io_data(
     # Ensure the datetime columns are in datetime type
     df['Trip Start Timestamp'] = pd.to_datetime(df['Trip Start Timestamp'])
     df['Trip End Timestamp'] = pd.to_datetime(df['Trip End Timestamp'])
+
+    # 然后转换为UNIX时间戳（浮点数）
+    df['Trip Start Timestamp'] = (df['Trip Start Timestamp'] - pd.Timestamp('1970-01-01 00:00:00')) / np.timedelta64(1,
+                                                                                                                     's')
+    df['Trip End Timestamp'] = (df['Trip End Timestamp'] - pd.Timestamp('1970-01-01 00:00:00')) / np.timedelta64(1, 's')
+
+    print(df.info())
 
     # Initialize the list of features
     feature_list = []
@@ -70,15 +64,18 @@ def generate_graph_seq2seq_io_data(
         y.append(data[t + y_offsets, :, :])
     x = np.stack(x, axis=0)
     y = np.stack(y, axis=0)
+    print("Data type of elements in x:", x.dtype)
+    print("Data type of elements in y:", y.dtype)
 
     return x, y
 
-
 def generate_train_val_test(args):
-    seq_length_x, seq_length_y = args.seq_length_x, args.seq_length_y
-    # df = pd.read_hdf(args.traffic_df_filename)
 
-    df = data
+
+    seq_length_x, seq_length_y = args.seq_length_x, args.seq_length_y
+
+    df = pd.read_csv(args.traffic_df_filename)
+    # 将 'Trip Start Timestamp' 和 'Trip End Timestamp' 列转换为 Unix 时间戳，并保留为浮点数类型
 
     # 0 is the latest observed sample.
     x_offsets = np.sort(np.concatenate((np.arange(-(seq_length_x - 1), 1, 1),)))
@@ -95,6 +92,12 @@ def generate_train_val_test(args):
     )
 
     print("x shape: ", x.shape, ", y shape: ", y.shape)
+    x = x.astype(float)
+    y = y.astype(float)
+
+
+
+
     # Write the data into npz file.
     num_samples = x.shape[0]
     num_test = round(num_samples * 0.2)
@@ -108,16 +111,14 @@ def generate_train_val_test(args):
         y[num_train: num_train + num_val],
     )
     x_test, y_test = x[-num_test:], y[-num_test:]
-    # 确保输出目录存在
+    # Ensure the output directory exists
     output_dir = args.output_dir
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     for cat in ["train", "val", "test"]:
         _x, _y = locals()["x_" + cat], locals()["y_" + cat]
-        print(cat, "x: ", _x.dtype, "y:", _y.shape)
-
-        # 打印将要保存的文件路径
-        file_path = os.path.join(args.output_dir, f"{cat}.npz")
+        # Print the file path where the data will be saved
+        file_path = os.path.join(output_dir, f"{cat}.npz")
         print(f"Attempting to save to: {file_path}")
 
         try:
@@ -126,11 +127,10 @@ def generate_train_val_test(args):
         except Exception as e:
             print(f"Failed to save {cat} data: {e}")
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--output_dir", type=str, default="data/temporal_data/Chicago", help="Output directory.")
-    parser.add_argument("--traffic_df_filename", type=str, default="../data/Chicago/2016_traffic/Taxi_Trips.csv", help="Raw traffic readings.",)
+    parser.add_argument("--traffic_df_filename", type=str, default="data/Chicago/2016_traffic/Taxi_Trips.csv", help="Raw traffic readings.",)
     parser.add_argument("--seq_length_x", type=int, default=24, help="Sequence Length.",)
     parser.add_argument("--seq_length_y", type=int, default=24, help="Sequence Length.",)
     parser.add_argument("--y_start", type=int, default=1, help="Y pred start", )

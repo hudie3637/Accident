@@ -1,21 +1,14 @@
 from typing import Any, Callable, Optional
 import torch
 import numpy as np
-from torchmetrics import Metric  # 或者导入具体的度量标准，如Accuracy
 
 from torch_geometric.utils import dense_to_sparse, get_laplacian, to_dense_adj
+from torchmetrics import Metric
 
 
 def get_L(W):
     edge_index, edge_weight = dense_to_sparse(W)
     edge_index, edge_weight = get_laplacian(edge_index, edge_weight)
-    adj = to_dense_adj(edge_index, edge_attr=edge_weight)[0]
-    return adj
-
-
-def get_L_ASTGCN(W):
-    edge_index, edge_weight = dense_to_sparse(W)
-    edge_index, edge_weight = get_laplacian(edge_index, edge_weight, normalization="rw")
     adj = to_dense_adj(edge_index, edge_attr=edge_weight)[0]
     return adj
 
@@ -73,31 +66,12 @@ def metric(pred, real):
 
 
 class LightningMetric(Metric):
-
-    def __init__(
-        self,
-        compute_on_step: bool = True,
-        dist_sync_on_step: bool = False,
-        process_group: Optional[Any] = None,
-        dist_sync_fn: Callable = None,
-    ):
-        super().__init__(
-            compute_on_step=compute_on_step,
-            dist_sync_on_step=dist_sync_on_step,
-            process_group=process_group,
-            dist_sync_fn=dist_sync_fn,
-        )
-        self.add_state("y_true", default=[], dist_reduce_fx=None)
-        self.add_state("y_pred", default=[], dist_reduce_fx=None)
+    def __init__(self):
+        super().__init__()
+        self.add_state("y_true", default=torch.tensor([]), dist_reduce_fx="cat")
+        self.add_state("y_pred", default=torch.tensor([]), dist_reduce_fx="cat")
 
     def update(self, preds: torch.Tensor, target: torch.Tensor):
-        """
-        Update state with predictions and targets.
-
-        Args:
-            preds: Predictions from model
-            target: Ground truth values
-        """
         self.y_pred.append(preds)
         self.y_true.append(target)
 

@@ -25,7 +25,13 @@ class AccidentGraph():
         self.A_road = torch.from_numpy(np.float32(np.load(os.path.join(graph_dir, 'Chicago_road.npy')))).to(device)
         self.A_closeness = torch.from_numpy(np.float32(np.load(os.path.join(graph_dir, 'Chicago_closeness.npy')))).to(device)
         self.A_pro = torch.from_numpy(np.float32(np.load(os.path.join(graph_dir, 'Chicago_propagation_graph.npy')))).to(device)
+        self.A_pro =  self.A_pro.unsqueeze(0).unsqueeze(0)  # 现在 X3 的形状是 [1, 1, 16, 16]
 
+        # 使用双线性插值上采样 X3
+        self.A_pro = torch.nn.functional.interpolate( self.A_pro, size=(77, 77), mode='bilinear', align_corners=False)
+
+        # 移除不必要的维度，以匹配 X1 和 X2 的形状
+        self.A_pro =  self.A_pro.squeeze(0).squeeze(0)  # 现在
         self.node_num = self.A_road.shape[0]
 
         self.use_graph = use_graph
@@ -69,26 +75,21 @@ class Accident(data.Dataset):
             try:
                 cat_data = np.load(file_path, allow_pickle=True)
 
-                # 检查'x'键对应的数据是否为Timestamp类型
-                if isinstance(cat_data['x'][0], pd.Timestamp):
-                    print('yes')
-                    # 将Timestamp转换为自Unix纪元以来的纳秒数
-                    cat_data['x'] = cat_data['x'].view(np.int64)
-
-                # 确保'x'已经是整数类型
                 self.data['x_' + category] = cat_data['x']
-
-                if isinstance(cat_data['y'][0], pd.Timestamp):
-                    cat_data['y'] = cat_data['y'].view(np.int64)
                 self.data['y_' + category] = cat_data['y']
             except FileNotFoundError:
-                print(f"File not found: {file_path}")
+                print(f"文件未找到：{file_path}")
                 continue
 
-        self.scaler = StandardScaler(mean=self.data['x_train'][..., 0].mean(), std=self.data['x_train'][..., 0].std())
-        for category in ['train', 'val', 'test']:
-            self.data['x_' + category][..., 0] = self.scaler.transform(self.data['x_' + category][..., 0])
-        self.x, self.y = self.data['x_%s' % self.data_type], self.data['y_%s' % self.data_type]
+        # 计算 'x_train' 数据的均值和标准差
+        if 'x_train' in self.data:
+            # 计算 'x_train' 数据的均值和标准差
+            mean = self.data['x_train'][..., 0].mean()
+            std = self.data['x_train'][..., 0].std()
+            self.scaler = StandardScaler(mean=mean, std=std)
+            for category in ['train', 'val', 'test']:
+                self.data['x_' + category][..., 0] = self.scaler.transform(self.data['x_' + category][..., 0])
+            self.x, self.y = self.data['x_%s' % self.data_type], self.data['y_%s' % self.data_type]
     def __len__(self):
         return len(self.x)
 

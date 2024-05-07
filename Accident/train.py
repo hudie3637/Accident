@@ -2,10 +2,9 @@
 import os
 import sys
 
-from GTAMN import GTAMN
-from accident import Accident
-
-from fusion_graph import gatedFusion
+from GTAMN import GTAMN_submodule
+from accident import Accident, AccidentGraph
+from fusion_graph import FusionGraphModel
 
 PROJ_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(PROJ_DIR)
@@ -14,7 +13,9 @@ import argparse
 
 
 from torch import nn
+from torch.nn import functional as F
 from torch.optim import Adam
+import torch.optim as optim
 from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 from pytorch_lightning import LightningDataModule, LightningModule, Trainer
@@ -30,67 +31,67 @@ parser = argparse.ArgumentParser()
 args = parser.parse_args()
 
 gpu_num = 0                                                 # set the GPU number of your server.
-os.environ['WANDB_MODE'] = 'online'                        # select one from ['online','offline']
+os.environ['WANDB_MODE'] = 'offline'                        # select one from ['online','offline']
 
-def hyperparameter_defaults():
-    return {
-        'train': {
-            'seed': 42,
-            'batch_size': 32,
-            'lr': 0.001,
-            'weight_decay': 0.0001,
-            'epoch': 10
-        },
-        'server': {
-            'gpu_id': 0
-        },
-        'fusion': {
-            'intra_M':10 ,  # 您需要确定每个图内部的特征数量
-            'intra_d': 10,  # 每个图内部的特征维度
-            'inter_M': 24,  # 跨图的特征数量
-            'inter_d': 6,  # 跨图的特征维度
-            'bn_decay': 0.1  # 批量归一化的衰减率
-        }
-    }
+hyperparameter_defaults = dict(
+    server=dict(
+        gpu_id=0,
+    ),
+    graph=dict(
+        use=['dist', 'neighb', 'distri','tempp', 'func'],   # select no more than five graphs from ['dist', 'neighb', 'distri', 'tempp', 'func'].
+        fix_weight=False,                                   # if True, the weight of each graph is fixed.
+        tempp_diag_zero=True,                               # if Ture, the values of temporal pattern similarity weight matrix turn to 0.
+        matrix_weight=True,                                 # if True, turn the weight matrices trainable.
+        distri_type='exp',                                  # select one from ['kl', 'ws', 'exp']: 'kl' is for Kullback-Leibler divergence, 'ws' is for Wasserstein, and 'exp' is for expotential fitting
+        func_type='ours',                                   # select one from ['ours', 'others'], 'others' is for the functionality graph proposed by "Spatiotemporal Multi-Graph Convolution Network for Ride-hailing Demand Forecasting"
+        attention=True,                                    # if True, the SG-ATT is used.
+    ),
+    model=dict(
+        # TODO: check batch_size
+        use='MSTGCN'
+    ),
+    data=dict(
+        in_dim=1,
+        out_dim=1,
+        hist_len=24,
+        pred_len=24,
+        type='pm25',
 
-wandb_proj = 'GTAMN'
+    ),
+    STMGCN=dict(
+        use_fusion_graph=True,
+    ),
+    train=dict(
+        seed=0,
+        epoch=40,
+        batch_size=32,
+        lr=1e-4,
+        weight_decay=1e-4,
+        M=24,
+        d=6,
+        bn_decay=0.1,
+    )
+)
+
+wandb_proj = 'parking'
 wandb.init(config=hyperparameter_defaults, project=wandb_proj)
 wandb_logger = WandbLogger()
 config = wandb.config
 
-
-pl.seed_everything(config['train']['seed'])
-
+pl.utilities.seed.seed_everything(config['train']['seed'])
 
 gpu_id = config['server']['gpu_id']
-device =  torch.device("cpu")
-# 实例化 gatedFusion
-fusion_model = gatedFusion(
-    intra_M=wandb.config.fusion['intra_M'],
-    intra_d=wandb.config.fusion['intra_d'],
-    inter_M=wandb.config.fusion['inter_M'],
-    inter_d=wandb.config.fusion['inter_d'],
-    bn_decay=wandb.config.fusion['bn_decay']
-)
-# 加载图数据
-road_graph = np.load('Chicago_road.npy')
-closeness_graph = np.load('Chicago_closeness.npy')
-propagation_graph = np.load('Chicago_propagation_graphs.npy')
-intra_M = config['fusion']['intra_M']
-# 将图数据转换为 PyTorch 张量并移动到适当的设备上
-X1 = torch.tensor(road_graph).to(device)  # 假设 road_graph 是特征数据
-X2 = torch.tensor(closeness_graph).to(device)
-X3 = torch.tensor(propagation_graph).to(device)
+device = 'cuda:%d' % gpu_id if torch.cuda.is_available() else 'cpu'
 
-# 根据需要准备 GE1, GE2, GE3，这里使用随机数据作为示例
-GE1 = torch.rand(size=(X1.shape[0], intra_M)).to(device)
-GE2 = torch.rand(size=(X2.shape[0], intra_M)).to(device)
-GE3 = torch.rand(size=(X3.shape[0], intra_M)).to(device)
+root_dir = 'data'
+chi_data_dir = os.path.join(root_dir, 'temporal_data/Chicago')
+chi_graph_dir = os.path.join(root_dir, 'Chicago')
+train_set = Accident(chi_data_dir, 'train')
+val_set = Accident(chi_data_dir, 'val')
+test_set = Accident(chi_data_dir, 'test')
+graph = AccidentGraph(chi_graph_dir, config['graph'], gpu_id)
 
-# 调用 forward 方法进行图融合
-fused_output = fusion_model(X1, X2, X3, GE1, GE2, GE3)
-# 将融合后的图转换为 PyTorch Tensor
-combined_graph_tensor = torch.tensor(fused_output)
+scaler = train_set.scaler
 
 class LightningData(LightningDataModule):
     def __init__(self, train_set, val_set, test_set):
@@ -116,88 +117,73 @@ class LightningModel(LightningModule):
     def __init__(self, scaler, fusiongraph):
         super().__init__()
 
-        # 标准化器，用于数据的标准化和反标准化
         self.scaler = scaler
-        # 融合图模型，用于处理图结构数据
         self.fusiongraph = fusiongraph
 
-        # 初始化用于测试的指标计算类
         self.metric_lightning = LightningMetric()
 
-        # 定义损失函数，这里使用的是平均绝对误差（L1 Loss）
         self.loss = nn.L1Loss(reduction='mean')
 
-        self.model = GTAMN(
-                gpu_id, fusiongraph,
+        if config['model']['use'] == 'ASTGCN':
 
-            )
+            for p in self.model.parameters():
+                if p.dim() > 1:
+                    nn.init.xavier_uniform_(p)
+                else:
+                    nn.init.uniform_(p)
+        elif config['model']['use'] == 'MSTGCN':
+            self.model = GTAMN_submodule(gpu_id, fusiongraph, config['data']['in_dim'], config['data']['hist_len'], config['data']['pred_len'])
+            for p in self.model.parameters():
+                if p.dim() > 1:
+                    nn.init.xavier_uniform_(p)
+                else:
+                    nn.init.uniform_(p)
+        else:
+            raise NotImplementedError
 
-        # 对模型参数进行初始化
-        for p in self.model.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)  # 对非标量参数使用 Xavier 均匀分布初始化
-            else:
-                nn.init.uniform_(p)  # 对标量参数使用均匀分布初始化
-
-        # 记录配置到日志
         self.log_dict(config)
 
     def forward(self, x):
-        # 定义模型的前向传播过程
         return self.model(x)
 
     def _run_model(self, batch):
-        # 辅助函数，用于运行模型并计算损失
         x, y = batch
         y_hat = self(x)
 
-        # 对预测结果进行反标准化
         y_hat = self.scaler.inverse_transform(y_hat)
 
-        # 计算损失，这里使用的是 masked_mae 函数
         loss = masked_mae(y_hat, y, 0.0)
 
         return y_hat, y, loss
 
     def training_step(self, batch, batch_idx):
-        # 定义单个训练步骤
         y_hat, y, loss = self._run_model(batch)
-        # 记录训练损失
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        # 定义单个验证步骤
         y_hat, y, loss = self._run_model(batch)
-        # 记录验证损失
         self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
     def test_step(self, batch, batch_idx):
-        # 定义单个测试步骤
         y_hat, y, loss = self._run_model(batch)
-        # 使用 LightningMetric 类计算指标
         self.metric_lightning(y_hat.cpu(), y.cpu())
-        # 记录测试损失
         self.log('test_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
     def test_epoch_end(self, outputs):
-        # 在每个测试周期结束时计算并记录测试指标
         test_metric_dict = self.metric_lightning.compute()
         self.log_dict(test_metric_dict)
 
     def configure_optimizers(self):
-        # 配置模型的优化器
         return Adam(self.parameters(), lr=config['train']['lr'], weight_decay=config['train']['weight_decay'])
 
+
 def main():
-    fusiongraph = gatedFusion(intra_M=..., intra_d=..., inter_M=..., inter_d=..., bn_decay=...)
-    # 创建数据集实例
-    train_set = Accident(data_dir='path_to_train_data', data_type='train')
-    val_set = Accident(data_dir='path_to_val_data', data_type='val')
-    test_set = Accident(data_dir='path_to_test_data', data_type='test')
-    # 创建 LightningData 和 LightningModel 实例
+    fusiongraph = FusionGraphModel(graph, gpu_id, config['graph'], config['data'], config['train']['M'], config['train']['d'], config['train']['bn_decay'])
+
     lightning_data = LightningData(train_set, val_set, test_set)
-    lightning_model = LightningModel(scaler=train_set.scaler, fusiongraph=fusiongraph)
+
+    lightning_model = LightningModel(scaler, fusiongraph)
 
     trainer = Trainer(
         logger=wandb_logger,
@@ -209,7 +195,8 @@ def main():
 
     trainer.fit(lightning_model, lightning_data)
     trainer.test(lightning_model, datamodule=lightning_data)
-
+    print('Graph USE', config['graph']['use'])
+    print('Data', config['data'])
 
 
 if __name__ == '__main__':
