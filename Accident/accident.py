@@ -30,8 +30,8 @@ class AccidentGraph():
         # 使用双线性插值上采样 X3
         self.A_pro = torch.nn.functional.interpolate( self.A_pro, size=(77, 77), mode='bilinear', align_corners=False)
 
-        # 移除不必要的维度，以匹配 X1 和 X2 的形状
-        self.A_pro =  self.A_pro.squeeze(0).squeeze(0)  # 现在
+
+        self.A_pro =  self.A_pro.squeeze(0).squeeze(0)
         self.node_num = self.A_road.shape[0]
 
         self.use_graph = use_graph
@@ -61,7 +61,6 @@ class AccidentGraph():
         else:
             raise NotImplementedError
 
-
 class Accident(data.Dataset):
     def __init__(self, data_dir, data_type):
         assert data_type in ['train', 'val', 'test']
@@ -75,21 +74,46 @@ class Accident(data.Dataset):
             try:
                 cat_data = np.load(file_path, allow_pickle=True)
 
-                self.data['x_' + category] = cat_data['x']
-                self.data['y_' + category] = cat_data['y']
+                # 处理 NaN、inf 和极端值
+                self.data['x_' + category] = self._clean_data(cat_data['x'])
+                self.data['y_' + category] = self._clean_data(cat_data['y'])
+
+                # # 打印数据集统计信息
+                # print(f"{category} 数据集的 x 均值: {self.data['x_' + category][..., 0].mean()}")
+                # print(f"{category} 数据集的 x 标准差: {self.data['x_' + category][..., 0].std()}")
             except FileNotFoundError:
                 print(f"文件未找到：{file_path}")
                 continue
 
-        # 计算 'x_train' 数据的均值和标准差
         if 'x_train' in self.data:
-            # 计算 'x_train' 数据的均值和标准差
-            mean = self.data['x_train'][..., 0].mean()
-            std = self.data['x_train'][..., 0].std()
+            x_train = self.data['x_train'][..., 0]
+
+            # 计算均值和标准差
+            mean = x_train.mean()
+            std = x_train.std()
+
+            # 避免标准差为零的情况
+            if std == 0:
+                print("警告: 标准差为零，可能导致标准化错误")
+                std = 1  # 避免除以零
+
             self.scaler = StandardScaler(mean=mean, std=std)
             for category in ['train', 'val', 'test']:
                 self.data['x_' + category][..., 0] = self.scaler.transform(self.data['x_' + category][..., 0])
+
             self.x, self.y = self.data['x_%s' % self.data_type], self.data['y_%s' % self.data_type]
+
+    def _clean_data(self, data):
+        # 将 NaN 转换为 0
+        data = np.nan_to_num(data)
+        # 将 inf 和 -inf 转换为有限的值
+        data[np.isinf(data)] = np.nan
+        data = np.nan_to_num(data)
+        # 设置阈值裁剪极端值
+        threshold = 1e6  # 设置一个合理的阈值
+        data = np.clip(data, -threshold, threshold)
+        return data
+
     def __len__(self):
         return len(self.x)
 
@@ -106,6 +130,10 @@ if __name__ == '__main__':
     graph = AccidentGraph(graph_dir, config_graph, gpu_id)
 
     data_dir = 'data/temporal_data/Chicago'
+    for data_type in ['train', 'val', 'test']:
+        file_path = os.path.join(data_dir, f"{data_type}.npz")
+        with np.load(file_path, allow_pickle=True) as data:
+            print(f"{data_type} dataset: x shape = {data['x'].shape}, y shape = {data['y'].shape}")
     for data_type in ['train', 'val', 'test']:
         dataset = Accident(data_dir, data_type)  # 初始化数据集
         print(f"Length of {data_type} dataset: {len(dataset)}")

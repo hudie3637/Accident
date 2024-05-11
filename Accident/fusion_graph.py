@@ -93,7 +93,7 @@ class GEmbedding(nn.Module):
 
         GE = graph_embbeding.unsqueeze(2).repeat(1, 1, GE.size(0), 1)
         GE = self.embed_layer(GE)
-        print(f'GE{GE.shape}')
+        # print(f'GE{GE.shape}')
         return GE
 
 

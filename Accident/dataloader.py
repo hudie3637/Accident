@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 def generate_graph_seq2seq_io_data(
-        df, x_offsets, y_offsets, add_time_in_day=False, add_day_in_week=False, scaler=None
+    df, x_offsets, y_offsets, add_time_in_day=False, add_day_in_week=False, scaler=None
 ):
     """
     Generate samples from
@@ -23,22 +23,14 @@ def generate_graph_seq2seq_io_data(
     # y: (epoch_size, output_length, num_nodes, output_dim)
     """
     # Ensure the datetime columns are in datetime type
-    df['Trip Start Timestamp'] = pd.to_datetime(df['Trip Start Timestamp'])
-    df['Trip End Timestamp'] = pd.to_datetime(df['Trip End Timestamp'])
 
-    # 然后转换为UNIX时间戳（浮点数）
-    df['Trip Start Timestamp'] = (df['Trip Start Timestamp'] - pd.Timestamp('1970-01-01 00:00:00')) / np.timedelta64(1,
-                                                                                                                     's')
-    df['Trip End Timestamp'] = (df['Trip End Timestamp'] - pd.Timestamp('1970-01-01 00:00:00')) / np.timedelta64(1, 's')
+    print(f'df shape: {df.shape}')
 
-    print(df.info())
-
-    # Initialize the list of features
-    feature_list = []
-
-    # Convert the DataFrame to a numpy array, adding an extra dimension
-    data = np.expand_dims(df.values, axis=-1)
-    feature_list.append(data)
+    num_samples, num_nodes = df.shape
+    print(f"Number of samples: {num_samples}, Number of nodes: {num_nodes}")
+    data = np.expand_dims(df, axis=-1)  # This will add an extra dimension for features
+    print(f"Expanded data shape: {data.shape}")
+    feature_list = [data]
 
     # Add the time of day feature if required
     if add_time_in_day:
@@ -58,40 +50,61 @@ def generate_graph_seq2seq_io_data(
     # Generate the input and output sequences
     x, y = [], []
     min_t = abs(min(x_offsets))
-    max_t = abs(len(df) - abs(max(y_offsets)))  # Exclusive
+    max_t = abs(num_samples - abs(max(y_offsets)))  # Exclusive
     for t in range(min_t, max_t):  # t is the index of the last observation.
-        x.append(data[t + x_offsets, :, :])
-        y.append(data[t + y_offsets, :, :])
+        x.append(data[t + x_offsets, ...])
+        y.append(data[t + y_offsets, ...])
     x = np.stack(x, axis=0)
     y = np.stack(y, axis=0)
-    print("Data type of elements in x:", x.dtype)
-    print("Data type of elements in y:", y.dtype)
-
     return x, y
 
 def generate_train_val_test(args):
-
-
     seq_length_x, seq_length_y = args.seq_length_x, args.seq_length_y
+    column_names = ['Trip Start Timestamp', 'Trip End Timestamp', 'Trip Seconds', 'Trip Miles',
+                    'Pickup Centroid Latitude', 'Pickup Centroid Longitude']
+    df = pd.read_csv(args.traffic_df_filename, usecols=column_names)
 
-    df = pd.read_csv(args.traffic_df_filename)
-    # 将 'Trip Start Timestamp' 和 'Trip End Timestamp' 列转换为 Unix 时间戳，并保留为浮点数类型
+    # 确保时间戳列是 datetime 类型
+    df['Trip Start Timestamp'] = pd.to_datetime(df['Trip Start Timestamp'], errors='coerce')
+    df['Trip End Timestamp'] = pd.to_datetime(df['Trip End Timestamp'], errors='coerce')
+    df['Trip Start Date'] = df['Trip Start Timestamp'].dt.date
+    df['Trip Start Hour'] = df['Trip Start Timestamp'].dt.hour
+    # 计算速度，确保 'Trip Miles' 和 'Trip Seconds' 是数值类型
+    df['Trip Miles'] = pd.to_numeric(df['Trip Miles'], errors='coerce')
+    df['Trip Seconds'] = pd.to_numeric(df['Trip Seconds'], errors='coerce')
+    df['Speed'] = df['Trip Miles'] / df['Trip Seconds']
 
-    # 0 is the latest observed sample.
+    # 派生出 'Trip Start Hour'
+    df['Trip Start Hour'] = df['Trip Start Timestamp'].dt.hour
+
+    # 聚合数据，计算每小时的平均速度
+    hourly_speeds = df.groupby(['Trip Start Date', 'Trip Start Hour'])['Speed'].mean().reset_index()
+    print(f'hourly_speeds{hourly_speeds.shape}')
+    hourly_speeds.dropna(inplace=True)
+    # 首先，确保 'Speed' 是数值类型
+    hourly_speeds['Speed'] = pd.to_numeric(hourly_speeds['Speed'], errors='coerce')
+    # 构建二维数组，其中包含 'Speed'
+    df_array = hourly_speeds[['Speed']].values
+    print(f'df_array shape: {df_array.shape}')
+
     x_offsets = np.sort(np.concatenate((np.arange(-(seq_length_x - 1), 1, 1),)))
     # Predict the next one hour
     y_offsets = np.sort(np.arange(args.y_start, (seq_length_y + 1), 1))
+    x_offsets = np.nan_to_num(x_offsets)
+
+    # 替换 y 中的 NaN 为 0
+    y_offsets = np.nan_to_num(y_offsets)
     # x: (num_samples, input_length, num_nodes, input_dim)
     # y: (num_samples, output_length, num_nodes, output_dim)
     x, y = generate_graph_seq2seq_io_data(
-        df,
+        df_array,
         x_offsets=x_offsets,
         y_offsets=y_offsets,
         add_time_in_day=False,
         add_day_in_week=args.dow,
     )
 
-    print("x shape: ", x.shape, ", y shape: ", y.shape)
+
     x = x.astype(float)
     y = y.astype(float)
 

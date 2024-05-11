@@ -59,48 +59,52 @@ def masked_mape(preds, labels, null_val=np.nan):
 
 
 def metric(pred, real):
-    mae = masked_mae(pred, real, 0.0).item()
-    mape = masked_mape(pred, real, 0.0).item()
-    rmse = masked_rmse(pred, real, 0.0).item()
-    return np.round(mae, 4), np.round(mape, 4), np.round(rmse, 4)
+    # 确保 pred 和 real 的尺寸一致
+    print(f'pred {pred.shape},real {real.shape}')
 
+
+    mae = masked_mae(pred.flatten(), real.flatten(), 0.0).item()
+    mape = masked_mape(pred.flatten(), real.flatten(), 0.0).item()
+    rmse = masked_rmse(pred.flatten(), real.flatten(), 0.0).item()
+    return np.round(mae, 4), np.round(mape, 4), np.round(rmse, 4)
 
 class LightningMetric(Metric):
     def __init__(self):
         super().__init__()
-        self.add_state("y_true", default=torch.tensor([]), dist_reduce_fx="cat")
-        self.add_state("y_pred", default=torch.tensor([]), dist_reduce_fx="cat")
+        # 初始化为 Tensor，使用 torch.zeros 来预留空间（如果需要）
+        # 这里的尺寸需要根据你的数据进行调整
+        self.add_state("y_true", torch.zeros((0,), dtype=torch.float32), dist_reduce_fx="cat")
+        self.add_state("y_pred", torch.zeros((0,), dtype=torch.float32), dist_reduce_fx="cat")
 
     def update(self, preds: torch.Tensor, target: torch.Tensor):
-        self.y_pred.append(preds)
-        self.y_true.append(target)
+        # 直接使用 torch.cat 来累积数据
+        # 假设 preds 和 target 的第一个维度是批次大小 (batch_size)
+        if self.y_pred.numel() == 0:  # 如果之前没有任何数据，直接赋值
+            self.y_pred = preds.clone()
+            self.y_true = target.clone()
+        else:
+            self.y_pred = torch.cat((self.y_pred, preds), dim=0)
+            self.y_true = torch.cat((self.y_true, target), dim=0)
 
     def compute(self):
-        """
-        Computes explained variance over state.
-        """
-        y_pred = torch.cat(self.y_pred, dim=0)
-        y_true = torch.cat(self.y_true, dim=0)
+        if self.y_pred.numel() == 0 or self.y_true.numel() == 0:
+            # 如果没有累积任何数据，则返回空的指标字典
+            return {}
 
-        feature_dim = y_pred.shape[-1]
-        pred_len = y_pred.shape[1]
-        # (16, 12, 38, 1)
+        # 将累积的数据转换为需要的形状
+        y_pred = self.y_pred.view(-1, self.y_pred.size(-1))
+        y_true = self.y_true.view(-1, self.y_true.size(-1))
 
-        y_pred = torch.reshape(y_pred.permute((0, 2, 1, 3)), (-1, pred_len, feature_dim))
-        y_true = torch.reshape(y_true.permute((0, 2, 1, 3)), (-1, pred_len, feature_dim))
-
-        # TODO: feature_dim, for multi-variable prediction, not only one.
-        y_pred = y_pred[..., 0]
-        y_true = y_true[..., 0]
-
+        # 初始化指标字典和列表以计算平均值
         metric_dict = {}
         rmse_avg = []
         mae_avg = []
         mape_avg = []
-        for i in range(pred_len):
+
+        # 假设我们有多个时间步长的数据
+        for i in range(y_pred.size(1)):
             mae, mape, rmse = metric(y_pred[:, i], y_true[:, i])
             idx = i + 1
-
             metric_dict.update({'rmse_%s' % idx: rmse})
             metric_dict.update({'mae_%s' % idx: mae})
             metric_dict.update({'mape_%s' % idx: mape})
@@ -109,20 +113,29 @@ class LightningMetric(Metric):
             mae_avg.append(mae)
             mape_avg.append(mape)
 
-        metric_dict.update({'rmse_avg': np.round(np.mean(rmse_avg), 4)})
-        metric_dict.update({'mae_avg': np.round(np.mean(mae_avg), 4)})
-        metric_dict.update({'mape_avg': np.round(np.mean(mape_avg), 4)})
+        # 计算并添加平均指标
+        metric_dict.update({'rmse_avg': np.mean(rmse_avg)})
+        metric_dict.update({'mae_avg': np.mean(mae_avg)})
+        metric_dict.update({'mape_avg': np.mean(mape_avg)})
+
+        # 重置状态以准备下一次计算
+        self.reset()
 
         return metric_dict
 
-
+    def reset(self):
+        # 重置累积的预测和真实值张量
+        self.y_pred = torch.empty(0, device=self.device)
+        self.y_true = torch.empty(0, device=self.device)
 class StandardScaler():
     def __init__(self, mean, std):
         self.mean = mean
         self.std = std
 
     def transform(self, data):
-        return (data - self.mean) / self.std
+
+            return (data - self.mean) / self.std
+
 
     def inverse_transform(self, data):
         return (data * self.std) + self.mean

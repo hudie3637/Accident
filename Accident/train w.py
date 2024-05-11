@@ -45,7 +45,7 @@ hyperparameter_defaults = dict(
     data=dict(
         in_dim=1,
         out_dim=1,
-        hist_len=24,
+        hist_len=64,
         pred_len=24,
         type='chi',
         hidden_size = 128  ,
@@ -54,7 +54,7 @@ hyperparameter_defaults = dict(
 
     train=dict(
         seed=0,
-        epoch=40,
+        epoch=1,
         batch_size=32,
         lr=1e-4,
         weight_decay=1e-4,
@@ -78,6 +78,7 @@ chi_graph_dir = os.path.join(root_dir, 'Chicago')
 train_set = Accident(chi_data_dir, 'train')
 val_set = Accident(chi_data_dir, 'val')
 test_set = Accident(chi_data_dir, 'test')
+
 graph = AccidentGraph(chi_graph_dir, config['graph'], gpu_id)
 
 scaler = train_set.scaler
@@ -90,16 +91,17 @@ class LightningData(LightningDataModule):
         self.val_set = val_set
         self.test_set = test_set
 
+
     def train_dataloader(self):
-        return DataLoader(self.train_set, batch_size=self.batch_size, shuffle=True, num_workers=0,
+        return DataLoader(self.train_set, batch_size=self.batch_size, shuffle=True, num_workers=4,persistent_workers=True,
                                    pin_memory=True, drop_last=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val_set, batch_size=self.batch_size, shuffle=False, num_workers=0,
+        return DataLoader(self.val_set, batch_size=self.batch_size, shuffle=False, num_workers=4,persistent_workers=True,
                                  pin_memory=True, drop_last=True)
 
     def test_dataloader(self):
-        return DataLoader(self.test_set, batch_size=self.batch_size, shuffle=False, num_workers=0,
+        return DataLoader(self.test_set, batch_size=self.batch_size, shuffle=False, num_workers=4,persistent_workers=True,
                                   pin_memory=True, drop_last=True)
 
 class LightningModel(LightningModule):
@@ -130,17 +132,30 @@ class LightningModel(LightningModule):
         # self.log_dict(config)
 
     def forward(self, x):
+        print(f'LightningModel x{x.shape}')
         return self.model(x)
 
     def _run_model(self, batch):
         x, y = batch
-        print(f'x{x.shape}')
+        # 确保输入数据需要梯度
+        x = x.requires_grad_()
+        print(f"Input to model (x) shape: {x.shape}")
         y_hat = self(x)
+        print(f"Output from model: {y_hat.shape}")
 
-        y_hat = self.scaler.inverse_transform(y_hat)
+        # 逆变换回原始尺度
+        y_hat = self.scaler.inverse_transform(y_hat.detach().cpu())
+        # print(f"y_hat after inverse transform: {y_hat.shape}")
 
+        # 确保 y 的形状与 y_hat 一致
+        y = y.view(y.shape[0], -1)  # 假设最后一个维度是时间步长，将其展平
+
+        # 检查 y 的新形状是否与 y_hat 匹配
+        if y.shape != y_hat.shape:
+            raise ValueError(f"The shapes of y_hat {y_hat.shape} and y {y.shape} do not match")
+        y_hat = torch.tensor(y_hat, device=self.device, requires_grad=True)
+        y = y.to(self.device)
         loss = masked_mae(y_hat, y, 0.0)
-
         return y_hat, y, loss
 
     def training_step(self, batch, batch_idx):
@@ -154,10 +169,11 @@ class LightningModel(LightningModule):
 
     def test_step(self, batch, batch_idx):
         y_hat, y, loss = self._run_model(batch)
+        print(f"y_hat: {y_hat.shape},y{y.shape}")
         self.metric_lightning(y_hat.cpu(), y.cpu())
         self.log('test_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
-    def test_epoch_end(self, outputs):
+    def on_test_epoch_end(self):
         test_metric_dict = self.metric_lightning.compute()
         self.log_dict(test_metric_dict)
 
