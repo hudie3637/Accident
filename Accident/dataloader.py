@@ -61,31 +61,47 @@ def generate_graph_seq2seq_io_data(
 def generate_train_val_test(args):
     seq_length_x, seq_length_y = args.seq_length_x, args.seq_length_y
     column_names = ['Trip Start Timestamp', 'Trip End Timestamp', 'Trip Seconds', 'Trip Miles',
-                    'Pickup Centroid Latitude', 'Pickup Centroid Longitude']
+                    'Pickup Community Area']
     df = pd.read_csv(args.traffic_df_filename, usecols=column_names)
 
-    # 确保时间戳列是 datetime 类型
+    # 将时间戳列转换为 datetime 类型
     df['Trip Start Timestamp'] = pd.to_datetime(df['Trip Start Timestamp'], errors='coerce')
     df['Trip End Timestamp'] = pd.to_datetime(df['Trip End Timestamp'], errors='coerce')
+
+    # 计算行程开始日期和小时
     df['Trip Start Date'] = df['Trip Start Timestamp'].dt.date
     df['Trip Start Hour'] = df['Trip Start Timestamp'].dt.hour
-    # 计算速度，确保 'Trip Miles' 和 'Trip Seconds' 是数值类型
+
+    # 确保 'Trip Miles' 和 'Trip Seconds' 为数值类型，并计算速度
     df['Trip Miles'] = pd.to_numeric(df['Trip Miles'], errors='coerce')
     df['Trip Seconds'] = pd.to_numeric(df['Trip Seconds'], errors='coerce')
-    df['Speed'] = df['Trip Miles'] / df['Trip Seconds']
 
-    # 派生出 'Trip Start Hour'
-    df['Trip Start Hour'] = df['Trip Start Timestamp'].dt.hour
+    # 避免除以零的错误
+    df['Speed'] = 0
+    df.loc[df['Trip Seconds'] > 0, 'Speed'] = df['Trip Miles'] * 1000 / df['Trip Seconds']
 
-    # 聚合数据，计算每小时的平均速度
-    hourly_speeds = df.groupby(['Trip Start Date', 'Trip Start Hour'])['Speed'].mean().reset_index()
-    print(f'hourly_speeds{hourly_speeds.shape}')
-    hourly_speeds.dropna(inplace=True)
-    # 首先，确保 'Speed' 是数值类型
-    hourly_speeds['Speed'] = pd.to_numeric(hourly_speeds['Speed'], errors='coerce')
-    # 构建二维数组，其中包含 'Speed'
-    df_array = hourly_speeds[['Speed']].values
-    print(f'df_array shape: {df_array.shape}')
+    # 聚合数据，计算每个社区区域在每个时间点的平均速度
+    hourly_speeds = df.groupby(['Pickup Community Area', 'Trip Start Date', 'Trip Start Hour'])[
+        'Speed'].mean().reset_index()
+    # 确保hourly_speeds按时间排序
+    hourly_speeds = hourly_speeds.sort_values(['Trip Start Date', 'Trip Start Hour'])
+    # 创建一个唯一的MultiIndex
+    index = pd.MultiIndex.from_frame(hourly_speeds[['Trip Start Date', 'Trip Start Hour']].drop_duplicates())
+
+    # 创建一个新的DataFrame，包含77列，每列对应一个社区区域
+    speed_df = pd.DataFrame(0.0, index=index, columns=hourly_speeds['Pickup Community Area'].unique())
+
+    # 填充DataFrame的值
+    for _, row in hourly_speeds.iterrows():
+        speed_df.loc[(row['Trip Start Date'], row['Trip Start Hour']), row['Pickup Community Area']] = row['Speed']
+
+    # 填充缺失值
+    speed_df = speed_df.fillna(0).astype(float)
+    print(f'speed_df: {speed_df.shape}')
+    # 转换为NumPy数组
+    df_array = speed_df.values
+
+    print(f'df_array: {df_array.shape}')
 
     x_offsets = np.sort(np.concatenate((np.arange(-(seq_length_x - 1), 1, 1),)))
     # Predict the next one hour
@@ -107,9 +123,6 @@ def generate_train_val_test(args):
 
     x = x.astype(float)
     y = y.astype(float)
-
-
-
 
     # Write the data into npz file.
     num_samples = x.shape[0]

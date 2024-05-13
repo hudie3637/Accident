@@ -2,6 +2,8 @@
 import os
 import sys
 
+from matplotlib import pyplot as plt, dates
+
 from GTAMN import GTAMN_submodule
 from accident import Accident, AccidentGraph
 from fusion_graph import FusionGraphModel
@@ -43,7 +45,7 @@ hyperparameter_defaults = dict(
     ),
 
     data=dict(
-        in_dim=1,
+        in_dim=24,
         out_dim=1,
         hist_len=64,
         pred_len=24,
@@ -91,18 +93,18 @@ class LightningData(LightningDataModule):
         self.val_set = val_set
         self.test_set = test_set
 
-
     def train_dataloader(self):
-        return DataLoader(self.train_set, batch_size=self.batch_size, shuffle=True, num_workers=4,persistent_workers=True,
+        return DataLoader(self.train_set, batch_size=self.batch_size, shuffle=True, num_workers=0,
                                    pin_memory=True, drop_last=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val_set, batch_size=self.batch_size, shuffle=False, num_workers=4,persistent_workers=True,
+        return DataLoader(self.val_set, batch_size=self.batch_size, shuffle=False, num_workers=0,
                                  pin_memory=True, drop_last=True)
 
     def test_dataloader(self):
-        return DataLoader(self.test_set, batch_size=self.batch_size, shuffle=False, num_workers=4,persistent_workers=True,
+        return DataLoader(self.test_set, batch_size=self.batch_size, shuffle=False, num_workers=0,
                                   pin_memory=True, drop_last=True)
+
 
 class LightningModel(LightningModule):
     def __init__(self, scaler, fusiongraph):
@@ -146,15 +148,15 @@ class LightningModel(LightningModule):
         # 逆变换回原始尺度
         y_hat = self.scaler.inverse_transform(y_hat.detach().cpu())
         # print(f"y_hat after inverse transform: {y_hat.shape}")
-
-        # 确保 y 的形状与 y_hat 一致
-        y = y.view(y.shape[0], -1)  # 假设最后一个维度是时间步长，将其展平
+        y = y.squeeze(dim=-1).permute(0, 2, 1)
+        print(f"y: {y.shape}")
 
         # 检查 y 的新形状是否与 y_hat 匹配
         if y.shape != y_hat.shape:
             raise ValueError(f"The shapes of y_hat {y_hat.shape} and y {y.shape} do not match")
         y_hat = torch.tensor(y_hat, device=self.device, requires_grad=True)
         y = y.to(self.device)
+
         loss = masked_mae(y_hat, y, 0.0)
         return y_hat, y, loss
 
@@ -169,13 +171,18 @@ class LightningModel(LightningModule):
 
     def test_step(self, batch, batch_idx):
         y_hat, y, loss = self._run_model(batch)
-        print(f"y_hat: {y_hat.shape},y{y.shape}")
+        print(f"y_hat: {y_hat},y{y}")
+
         self.metric_lightning(y_hat.cpu(), y.cpu())
         self.log('test_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
     def on_test_epoch_end(self):
         test_metric_dict = self.metric_lightning.compute()
         self.log_dict(test_metric_dict)
+
+
+
+
 
     def configure_optimizers(self):
         return Adam(self.parameters(), lr=config['train']['lr'], weight_decay=config['train']['weight_decay'])
@@ -198,6 +205,9 @@ def main():
 
     trainer.fit(lightning_model, lightning_data)
     trainer.test(lightning_model, datamodule=lightning_data)
+
+
+    # 打印使用的图和数据配置
     print('Graph USE', config['graph']['use'])
     print('Data', config['data'])
 
