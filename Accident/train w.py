@@ -46,12 +46,10 @@ hyperparameter_defaults = dict(
 
     data=dict(
         in_dim=24,
-        out_dim=1,
-        hist_len=64,
-        pred_len=24,
+        hist_len=24,
+        pred_len=1,
         type='chi',
         hidden_size = 128  ,
-        num_rnn_layers = 2
     ),
 
     train=dict(
@@ -123,7 +121,6 @@ class LightningModel(LightningModule):
             len_input=config['data']['hist_len'],
             num_for_predict=config['data']['pred_len'],
             hidden_size=config['data']['hidden_size'],
-            num_rnn_layers=config['data']['num_rnn_layers']
         )
         for p in self.model.parameters():
             if p.dim() > 1:
@@ -139,6 +136,8 @@ class LightningModel(LightningModule):
 
     def _run_model(self, batch):
         x, y = batch
+        y = y[:, 0, :, :]
+        print(f"y: {y.shape}")
         # 确保输入数据需要梯度
         x = x.requires_grad_()
         print(f"Input to model (x) shape: {x.shape}")
@@ -148,8 +147,9 @@ class LightningModel(LightningModule):
         # 逆变换回原始尺度
         y_hat = self.scaler.inverse_transform(y_hat.detach().cpu())
         # print(f"y_hat after inverse transform: {y_hat.shape}")
-        y = y.squeeze(dim=-1).permute(0, 2, 1)
-        print(f"y: {y.shape}")
+        # y = y.squeeze(1)  # 移除第二维
+
+        print(f"y_hat: {y_hat.shape}")
 
         # 检查 y 的新形状是否与 y_hat 匹配
         if y.shape != y_hat.shape:
@@ -179,10 +179,6 @@ class LightningModel(LightningModule):
     def on_test_epoch_end(self):
         test_metric_dict = self.metric_lightning.compute()
         self.log_dict(test_metric_dict)
-
-
-
-
 
     def configure_optimizers(self):
         return Adam(self.parameters(), lr=config['train']['lr'], weight_decay=config['train']['weight_decay'])

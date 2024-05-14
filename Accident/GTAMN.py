@@ -144,7 +144,7 @@ class GTAMN_block(nn.Module):
         return x_residual
 # GTAMN Submodule
 class GTAMN_submodule(nn.Module):
-    def __init__(self, gpu_id, fusiongraph, in_channels, len_input, num_for_predict, hidden_size, num_rnn_layers):
+    def __init__(self, gpu_id, fusiongraph, in_channels, len_input, num_for_predict, hidden_size):
         super(GTAMN_submodule, self).__init__()
         device = 'cuda:%d' % gpu_id if torch.cuda.is_available() else 'cpu'
         self.device = device
@@ -165,8 +165,8 @@ class GTAMN_submodule(nn.Module):
         ])
 
         self.final_conv = nn.Conv2d(nb_time_filter, num_for_predict, kernel_size=(1, 1))
-        self.rnn = RNNLayer(nb_time_filter, hidden_size, hidden_size, num_rnn_layers)
-        self.regression_mlp = nn.Linear(hidden_size, num_for_predict)
+        # self.rnn = RNNLayer(nb_time_filter, hidden_size, hidden_size, num_rnn_layers)
+        # self.regression_mlp = nn.Linear(hidden_size, num_for_predict)
 
         self.to(self.device)
 

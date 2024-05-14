@@ -60,7 +60,7 @@ def masked_mape(preds, labels, null_val=np.nan):
 
 def metric(pred, real):
     # 确保 pred 和 real 的尺寸一致
-    print(f'pred {pred.shape},real {real.shape}')
+    # print(f'pred {pred.shape},real {real.shape}')
 
 
     mae = masked_mae(pred.flatten(), real.flatten(), 0.0).item()
@@ -106,9 +106,9 @@ class LightningMetric(Metric):
             mae, mape, rmse = metric(y_pred[:, i], y_true[:, i])
             idx = i + 1
 
-            metric_dict.update({'rmse_%s' % idx: rmse})
-            metric_dict.update({'mae_%s' % idx: mae})
-            metric_dict.update({'mape_%s' % idx: mape})
+            # metric_dict.update({'rmse_%s' % idx: rmse})
+            # metric_dict.update({'mae_%s' % idx: mae})
+            # metric_dict.update({'mape_%s' % idx: mape})
 
             rmse_avg.append(rmse)
             mae_avg.append(mae)

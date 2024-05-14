@@ -58,50 +58,65 @@ def generate_graph_seq2seq_io_data(
     y = np.stack(y, axis=0)
     return x, y
 
+
 def generate_train_val_test(args):
     seq_length_x, seq_length_y = args.seq_length_x, args.seq_length_y
     column_names = ['Trip Start Timestamp', 'Trip End Timestamp', 'Trip Seconds', 'Trip Miles',
                     'Pickup Community Area']
     df = pd.read_csv(args.traffic_df_filename, usecols=column_names)
-
     # 将时间戳列转换为 datetime 类型
     df['Trip Start Timestamp'] = pd.to_datetime(df['Trip Start Timestamp'], errors='coerce')
     df['Trip End Timestamp'] = pd.to_datetime(df['Trip End Timestamp'], errors='coerce')
 
-    # 计算行程开始日期和小时
-    df['Trip Start Date'] = df['Trip Start Timestamp'].dt.date
-    df['Trip Start Hour'] = df['Trip Start Timestamp'].dt.hour
+    # 过滤数据
+    df = df.dropna(subset=['Trip Miles', 'Trip Seconds'])
+    df = df[(df['Trip Miles'] > 0) & (df['Trip Seconds'] > 0)]
 
-    # 确保 'Trip Miles' 和 'Trip Seconds' 为数值类型，并计算速度
-    df['Trip Miles'] = pd.to_numeric(df['Trip Miles'], errors='coerce')
-    df['Trip Seconds'] = pd.to_numeric(df['Trip Seconds'], errors='coerce')
+    # 计算速度
+    df['Trip Miles_km'] = df['Trip Miles'] * 1.60934
+    df['Trip Seconds_h'] = df['Trip Seconds'] / 3600
+    df['Speed'] = df['Trip Miles_km'] / df['Trip Seconds_h']
 
-    # 避免除以零的错误
-    df['Speed'] = 0
-    df.loc[df['Trip Seconds'] > 0, 'Speed'] = df['Trip Miles'] * 1000 / df['Trip Seconds']
+    # 过滤异常速度值
+    reasonable_speed_threshold = 200
+    df = df[df['Speed'] <= reasonable_speed_threshold]
 
-    # 聚合数据，计算每个社区区域在每个时间点的平均速度
-    hourly_speeds = df.groupby(['Pickup Community Area', 'Trip Start Date', 'Trip Start Hour'])[
-        'Speed'].mean().reset_index()
-    # 确保hourly_speeds按时间排序
-    hourly_speeds = hourly_speeds.sort_values(['Trip Start Date', 'Trip Start Hour'])
-    # 创建一个唯一的MultiIndex
-    index = pd.MultiIndex.from_frame(hourly_speeds[['Trip Start Date', 'Trip Start Hour']].drop_duplicates())
+    # 定义函数生成时间点范围
+    def generate_time_range(row):
+        return pd.date_range(start=row['Trip Start Timestamp'],
+                             end=row['Trip End Timestamp'],
+                             freq='15T')  # 15分钟间隔
 
-    # 创建一个新的DataFrame，包含77列，每列对应一个社区区域
-    speed_df = pd.DataFrame(0.0, index=index, columns=hourly_speeds['Pickup Community Area'].unique())
+    # 对每个行程生成时间点范围
+    df['Time Points'] = df.apply(generate_time_range, axis=1)
 
-    # 填充DataFrame的值
-    for _, row in hourly_speeds.iterrows():
-        speed_df.loc[(row['Trip Start Date'], row['Trip Start Hour']), row['Pickup Community Area']] = row['Speed']
+    # 将DataFrame展开为长格式，每个时间点一行
+    expanded_df = df.explode('Time Points')
 
-    # 填充缺失值
-    speed_df = speed_df.fillna(0).astype(float)
-    print(f'speed_df: {speed_df.shape}')
-    # 转换为NumPy数组
-    df_array = speed_df.values
+    # 提取时间点的日期和小时
+    expanded_df['Time Point Date'] = expanded_df['Time Points'].dt.date
+    expanded_df['Time Point Hour'] = expanded_df['Time Points'].dt.hour
+    expanded_df['Time Point Minute'] = expanded_df['Time Points'].dt.minute
 
-    print(f'df_array: {df_array.shape}')
+    # 使用 'Pickup Community Area' 作为区域信息
+    result_df = expanded_df[
+        ['Time Points', 'Time Point Date', 'Time Point Hour', 'Time Point Minute', 'Pickup Community Area', 'Speed']
+    ]
+
+    # 聚合处理重复项，确保唯一
+    aggregated_df = result_df.groupby(
+        ['Time Points', 'Time Point Date', 'Time Point Hour', 'Time Point Minute', 'Pickup Community Area']).agg(
+        {'Speed': 'mean'}).reset_index()
+
+    # 将数据转换为每行一个时间点，每列一个区域的DataFrame
+    final_df = aggregated_df.pivot_table(index=['Time Point Date', 'Time Point Hour', 'Time Point Minute'],
+                                         columns='Pickup Community Area',
+                                         values='Speed',
+                                         fill_value=0)
+
+    # 转换为 numpy 数组
+    df_array = final_df.values
+    df_array = np.nan_to_num(df_array)  # 确保没有 NaN 值
 
     x_offsets = np.sort(np.concatenate((np.arange(-(seq_length_x - 1), 1, 1),)))
     # Predict the next one hour
