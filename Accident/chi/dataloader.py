@@ -64,59 +64,66 @@ def generate_train_val_test(args):
     column_names = ['Trip Start Timestamp', 'Trip End Timestamp', 'Trip Seconds', 'Trip Miles',
                     'Pickup Community Area']
     df = pd.read_csv(args.traffic_df_filename, usecols=column_names)
-    # 将时间戳列转换为 datetime 类型
+    # Converting timestamp columns to datetime
     df['Trip Start Timestamp'] = pd.to_datetime(df['Trip Start Timestamp'], errors='coerce')
     df['Trip End Timestamp'] = pd.to_datetime(df['Trip End Timestamp'], errors='coerce')
 
-    # 过滤数据
+    # Filtering data for valid entries
     df = df.dropna(subset=['Trip Miles', 'Trip Seconds'])
     df = df[(df['Trip Miles'] > 0) & (df['Trip Seconds'] > 0)]
 
-    # 计算速度
-    df['Trip Miles_km'] = df['Trip Miles'] * 1.60934
-    df['Trip Seconds_h'] = df['Trip Seconds'] / 3600
+    # Calculating speed
+    df['Trip Miles_km'] = df['Trip Miles'] * 1.60934  # converting miles to km
+    df['Trip Seconds_h'] = df['Trip Seconds'] / 3600  # converting seconds to hours
     df['Speed'] = df['Trip Miles_km'] / df['Trip Seconds_h']
 
-    # 过滤异常速度值
+    # Filtering out unreasonable speed values
     reasonable_speed_threshold = 200
     df = df[df['Speed'] <= reasonable_speed_threshold]
 
-    # 定义函数生成时间点范围
-    def generate_time_range(row):
-        return pd.date_range(start=row['Trip Start Timestamp'],
-                             end=row['Trip End Timestamp'],
-                             freq='15T')  # 15分钟间隔
+    # Creating time ranges for each trip
+    df['Time Points'] = df.apply(lambda row: pd.date_range(start=row['Trip Start Timestamp'],
+                                                           end=row['Trip End Timestamp'],
+                                                           freq='15T'), axis=1)
 
-    # 对每个行程生成时间点范围
-    df['Time Points'] = df.apply(generate_time_range, axis=1)
-
-    # 将DataFrame展开为长格式，每个时间点一行
+    # Expanding DataFrame to have one row per time point
     expanded_df = df.explode('Time Points')
-
-    # 提取时间点的日期和小时
     expanded_df['Time Point Date'] = expanded_df['Time Points'].dt.date
     expanded_df['Time Point Hour'] = expanded_df['Time Points'].dt.hour
     expanded_df['Time Point Minute'] = expanded_df['Time Points'].dt.minute
 
-    # 使用 'Pickup Community Area' 作为区域信息
-    result_df = expanded_df[
-        ['Time Points', 'Time Point Date', 'Time Point Hour', 'Time Point Minute', 'Pickup Community Area', 'Speed']
-    ]
-
-    # 聚合处理重复项，确保唯一
-    aggregated_df = result_df.groupby(
-        ['Time Points', 'Time Point Date', 'Time Point Hour', 'Time Point Minute', 'Pickup Community Area']).agg(
+    # Aggregating by average speed per community area and time point
+    result_df = expanded_df.groupby(
+        ['Time Point Date', 'Time Point Hour', 'Time Point Minute', 'Pickup Community Area']).agg(
         {'Speed': 'mean'}).reset_index()
 
-    # 将数据转换为每行一个时间点，每列一个区域的DataFrame
-    final_df = aggregated_df.pivot_table(index=['Time Point Date', 'Time Point Hour', 'Time Point Minute'],
-                                         columns='Pickup Community Area',
-                                         values='Speed',
-                                         fill_value=0)
+    # Pivoting the DataFrame
+    final_df = result_df.pivot_table(index=['Time Point Date', 'Time Point Hour', 'Time Point Minute'],
+                                     columns='Pickup Community Area', values='Speed', fill_value=0)
 
-    # 转换为 numpy 数组
+    # Function to fill zeros with the mean of the previous day
+    def fill_with_previous_day_mean(df):
+        for column in df.columns:
+            # Calculating the mean speed of the previous day for each hour and minute
+            df[column] = df[column].replace(0, pd.NA).fillna(method='ffill').fillna(method='bfill')
+        return df
+
+    final_df = fill_with_previous_day_mean(final_df)
+
+    # Function to fill remaining zeros using a rolling mean
+    def fill_with_rolling_mean(df, window_size=7):
+        for column in df.columns:
+            df[column] = df[column].rolling(window=window_size, min_periods=1).mean().fillna(method='bfill')
+        return df
+
+    final_df = fill_with_rolling_mean(final_df)
+
+    # Calculate global mean and fill any remaining missing values
+    global_mean = final_df.mean().mean()  # average speed across all times and areas
+    final_df = final_df.fillna(global_mean)
+
+    # Preparing the data array for predictions
     df_array = final_df.values
-    df_array = np.nan_to_num(df_array)  # 确保没有 NaN 值
 
     x_offsets = np.sort(np.concatenate((np.arange(-(seq_length_x - 1), 1, 1),)))
     # Predict the next one hour

@@ -171,7 +171,7 @@ class LightningModel(LightningModule):
 
     def test_step(self, batch, batch_idx):
         y_hat, y, loss = self._run_model(batch)
-        print(f"y_hat: {y_hat},y{y}")
+        # print(f"y_hat: {y_hat},y{y}")
 
         self.metric_lightning(y_hat.cpu(), y.cpu())
         self.log('test_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
