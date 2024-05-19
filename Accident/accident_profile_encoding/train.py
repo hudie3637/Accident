@@ -23,14 +23,15 @@ def train_model(num_epochs, model, train_loader, test_loader, criterion, optimiz
         print(f'Epoch {epoch+1}/{num_epochs}, Loss: {running_loss / len(train_loader):.4f}')
 
         # 使用test_loader评估模型
-        accuracy, precision, recall, f1 = evaluate_model(model, test_loader, device,'chi_pre_vs_true.csv')
+        accuracy, precision, recall, f1 = evaluate_model(model, test_loader, device,'NYC_pre_vs_true.csv')
         if accuracy > best_accuracy:
             best_accuracy = accuracy
             best_model_state = model.state_dict().copy()
 
     print(f'Best validation accuracy: {best_accuracy:.2f}%')
     model.load_state_dict(best_model_state)
-    torch.save(model.state_dict(), 'chi_model_weights.pth')  # 使用正确的文件路径
+    # torch.save(model.state_dict(), 'chi_model_weights.pth')
+    torch.save(model.state_dict(), 'NYC_model_weights.pth')
 
     return best_accuracy  # 可以选择返回最佳准确率
 
@@ -74,7 +75,7 @@ def evaluate_model(model, test_loader, device, output_filename):
     print(f'F1 Score: {f1:.5f}')
 
     # 将嵌入向量保存到文件
-    embeddings_path = '../data/Chicago/Chicago_accident.npy'  # 替换为您想要的文件路径
+    embeddings_path = '../data/NYC/NYC_accident.npy'  # 替换为您想要的文件路径
     np.save(embeddings_path, np.array(all_embeddings))
     # 将预测结果和真实标签写入CSV文件
     with open(output_filename, mode='w', newline='') as file:

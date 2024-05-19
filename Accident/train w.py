@@ -73,13 +73,13 @@ gpu_id = config['server']['gpu_id']
 device = 'cuda:%d' % gpu_id if torch.cuda.is_available() else 'cpu'
 
 root_dir = 'data'
-chi_data_dir = os.path.join(root_dir, 'temporal_data/Chicago')
-chi_graph_dir = os.path.join(root_dir, 'Chicago')
-train_set = Accident(chi_data_dir, 'train')
-val_set = Accident(chi_data_dir, 'val')
-test_set = Accident(chi_data_dir, 'test')
+data_dir = os.path.join(root_dir, 'temporal_data/NYC')
+graph_dir = os.path.join(root_dir, 'NYC')
+train_set = Accident(data_dir, 'train')
+val_set = Accident(data_dir, 'val')
+test_set = Accident(data_dir, 'test')
 
-graph = AccidentGraph(chi_graph_dir, config['graph'], gpu_id)
+graph = AccidentGraph(graph_dir, config['graph'], gpu_id)
 
 scaler = train_set.scaler
 
@@ -92,15 +92,15 @@ class LightningData(LightningDataModule):
         self.test_set = test_set
 
     def train_dataloader(self):
-        return DataLoader(self.train_set, batch_size=self.batch_size, shuffle=True, num_workers=0,
+        return DataLoader(self.train_set, batch_size=self.batch_size, shuffle=True, num_workers=4,
                                    pin_memory=True, drop_last=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val_set, batch_size=self.batch_size, shuffle=False, num_workers=0,
+        return DataLoader(self.val_set, batch_size=self.batch_size, shuffle=False, num_workers=4,
                                  pin_memory=True, drop_last=True)
 
     def test_dataloader(self):
-        return DataLoader(self.test_set, batch_size=self.batch_size, shuffle=False, num_workers=0,
+        return DataLoader(self.test_set, batch_size=self.batch_size, shuffle=False, num_workers=4,
                                   pin_memory=True, drop_last=True)
 
 
@@ -185,6 +185,7 @@ class LightningModel(LightningModule):
 
 
 def main():
+
     fusiongraph = FusionGraphModel(graph, gpu_id, config['graph'], config['data'], config['train']['M'], config['train']['d'], config['train']['bn_decay'])
 
     lightning_data = LightningData(train_set, val_set, test_set)

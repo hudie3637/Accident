@@ -27,6 +27,7 @@ class AccidentSeverityModel(nn.Module):
 
         x_weekday_embed = self.embed_weekday(x_weekday_indices)
         x_time_embed = self.embed_time(x_time_indices)
+        print(x_location_indices.min(), x_location_indices.max())
         x_location_embed = self.embed_region(x_location_indices)
 
         # 将嵌入向量展平

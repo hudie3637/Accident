@@ -21,22 +21,30 @@ parser.add_argument('--load_weights', type=str, default=None, help='Path to the 
 parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
 parser.add_argument('--num_epochs', type=int, default=10, help='Number of epochs to train')
 args = parser.parse_args()
-traffic_data = np.load('../data/Chicago/Chicago_traffic_weather_sequence.npy')
+# traffic_data = np.load('../data/Chicago/Chicago_traffic_weather_sequence.npy')
+traffic_data = np.load('../data/NYC/NYC_traffic_weather_sequence.npy')
+
 conv1d_kernel_size = 3
 conv1d_num_filters = 64
 num_days = 7
 num_hours = 24
-num_regions = 80
+num_regions = 300
 embedding_dim = 64
 def main():
     # 根据命令行参数选择设备
     device = torch.device('cuda' if args.enable_cuda and torch.cuda.is_available() else 'cpu')
 
     # 加载数据
-    X_BERT, X_weekday, X_time, X_location, X_traffic, y = load_data(os.path.join(args.data_path, 'Chicago'))
+    X_BERT, X_weekday, X_time, X_location, X_traffic, y = load_data(os.path.join(args.data_path, 'NYC'))
     print(
         f'Shapes of data arrays: X_BERT={X_BERT.shape}, X_weekday={X_weekday.shape}, X_time={X_time.shape}, X_location={X_location.shape}, X_traffic={X_traffic.shape}')
-
+    X_BERT = X_BERT[:50430]
+    X_weekday = X_weekday[:50430]
+    X_time = X_time[:50430]
+    X_traffic = X_traffic[:50430]
+    y=y[:50430]
+    # print(f'X_time{X_time}')
+    # print(f'X_location{X_location}')
     if X_BERT is None:
         return  # 如果加载数据失败，则退出程序
         # 转换星期几、时间、地点数据为整数索引
@@ -45,7 +53,7 @@ def main():
     offset_time = -X_time.min() + 1
     offset_location = -X_location.min() + 1
 
-        # 转换位置编码为非负整数索引
+    # 转换位置编码为非负整数索引
     X_weekday_indices = X_weekday + offset_weekday
     X_time_indices = X_time + offset_time
     X_location_indices = X_location + offset_location
@@ -54,9 +62,7 @@ def main():
     X_time_indices = X_time_indices.to(torch.long).to(device)
     X_location_indices =X_location_indices.to(torch.long).to(device)
 
-
-    # 使用train_test_split进行数据划分
-    train_idx, test_idx = train_test_split(range(len(y)), test_size=0.2, random_state=42)
+    train_idx, test_idx = train_test_split(range(len(X_traffic)), test_size=0.2, random_state=42)
 
     # 根据索引分割所有数据
     # 这里只迁移分割后的数据到设备上
@@ -112,6 +118,8 @@ def main():
     # 训练模型
     train_model(args.num_epochs, model, train_loader, test_loader, criterion, optimizer, device)
     # 评估模型
-    evaluate_model(model, test_loader,device,'chi_pre_vs_true.csv')
+    # evaluate_model(model, test_loader,device,'chi_pre_vs_true.csv')
+    evaluate_model(model, test_loader,device,'NYC_pre_vs_true.csv')
+
 if __name__ == "__main__":
     main()

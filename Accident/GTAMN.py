@@ -79,9 +79,9 @@ class cheb_conv(nn.Module):
                 T_k = cheb_polynomials[k]  # (N,N)
 
                 theta_k = self.Theta[k]  # (in_channel, out_channel)
-               # print(f'T_k{T_k.shape}')
-               # print(f'graph_signal{graph_signal.shape}')
-                #print(f'theta_k{theta_k.shape}')
+                print(f'T_k{T_k.shape}')
+                print(f'graph_signal{graph_signal.shape}')
+                print(f'theta_k{theta_k.shape}')
                 rhs = graph_signal.permute(0, 2, 1).matmul(T_k).permute(0, 2, 1)
                # print(f'rhs{rhs.shape}')
                 h = rhs.matmul(theta_k)
