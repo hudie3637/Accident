@@ -78,13 +78,41 @@ plt.title('Speed Distribution for Community Area 1')  # Adjust the title to matc
 plt.xlabel('Speed (km/h)')
 plt.ylabel('Frequency')
 plt.show()
+def calculate_mape(actuals, predictions):
+    non_zero_index = actuals != 0
+    absolute_errors = np.abs((actuals - predictions)[non_zero_index])
+    actual_values = actuals[non_zero_index]
+    return np.mean(absolute_errors / actual_values) 
+
+# 计算RMSE
+def calculate_rmse(actuals, predictions):
+    squared_errors = np.square(actuals - predictions)
+    return np.sqrt(np.mean(squared_errors))
 # 计算MSE和MAE
-mse = mean_squared_error(actuals, predictions)
+
 mae = mean_absolute_error(actuals, predictions)
 
 print(f"Historical Average Model Performance:")
-print(f"Mean Squared Error (MSE): {mse}")
-print(f"Mean Absolute Error (MAE): {mae}")
+print(f"MAE: {mae}")
+
+
+# 计算MAPE
+mape = calculate_mape(actuals, predictions)
+
+# 计算RMSE
+rmse = calculate_rmse(actuals, predictions)
+
+print(f"MAPE: {mape}")
+print(f"RMSE: {rmse}")
+
+# 损失函数（通常用于机器学习模型，这里我们使用MSE作为示例）
+def loss_function(actuals, predictions):
+    return mean_squared_error(actuals, predictions)
+
+# 计算损失
+loss = loss_function(actuals, predictions)
+
+print(f"Loss: {loss}")
 
 # 绘制预测速度与实际速度对比图
 plt.figure(figsize=(12, 6))

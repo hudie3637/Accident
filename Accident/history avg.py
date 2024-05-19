@@ -91,7 +91,7 @@ def calculate_mape(actuals, predictions):
     non_zero_index = actuals != 0
     absolute_errors = np.abs((actuals - predictions)[non_zero_index])
     actual_values = actuals[non_zero_index]
-    return np.mean(absolute_errors / actual_values) * 100
+    return np.mean(absolute_errors / actual_values)
 
 # 计算RMSE
 def calculate_rmse(actuals, predictions):
