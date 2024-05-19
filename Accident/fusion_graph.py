@@ -40,6 +40,7 @@ class conv2d_(nn.Module):
             torch.nn.init.zeros_(self.conv.bias)
 
     def forward(self, x):
+        gpu_id = 0
         device = 'cuda:%d' % gpu_id if torch.cuda.is_available() else 'cpu'
         x = x.permute(0, 3, 2, 1)
         x = x.to(device)

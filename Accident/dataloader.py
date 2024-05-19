@@ -105,10 +105,11 @@ def generate_train_val_test(args):
     expanded_df['Time Point Hour'] = expanded_df['Time Points'].dt.hour
     expanded_df['Time Point Minute'] = expanded_df['Time Points'].dt.minute
 
-
+    # 使用 'Pickup Community Area' 作为区域信息
     result_df = expanded_df[
         ['Time Points', 'Time Point Date', 'Time Point Hour', 'Time Point Minute', 'PULocationID', 'Speed']
     ]
+
     # 聚合处理重复项，确保唯一
     aggregated_df = result_df.groupby(
         ['Time Points', 'Time Point Date', 'Time Point Hour', 'Time Point Minute', 'PULocationID']).agg(
@@ -120,9 +121,29 @@ def generate_train_val_test(args):
                                          values='Speed',
                                          fill_value=0)
 
-    # 转换为 numpy 数组
+    # Function to fill zeros with the mean of the previous day
+    def fill_with_previous_day_mean(df):
+        for column in df.columns:
+            # Calculating the mean speed of the previous day for each hour and minute
+            df[column] = df[column].replace(0, pd.NA).fillna(method='ffill').fillna(method='bfill')
+        return df
+
+    final_df = fill_with_previous_day_mean(final_df)
+
+    # Function to fill remaining zeros using a rolling mean
+    def fill_with_rolling_mean(df, window_size=7):
+        for column in df.columns:
+            df[column] = df[column].rolling(window=window_size, min_periods=1).mean().fillna(method='bfill')
+        return df
+
+    final_df = fill_with_rolling_mean(final_df)
+
+    # Calculate global mean and fill any remaining missing values
+    global_mean = final_df.mean().mean()  # average speed across all times and areas
+    final_df = final_df.fillna(global_mean)
+
+    # Preparing the data array for predictions
     df_array = final_df.values
-    df_array = np.nan_to_num(df_array)  # 确保没有 NaN 值
     # 假设 df 是您的 DataFrame
 
     x_offsets = np.sort(np.concatenate((np.arange(-(seq_length_x - 1), 1, 1),)))
