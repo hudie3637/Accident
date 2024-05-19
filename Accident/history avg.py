@@ -4,7 +4,6 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 import matplotlib.pyplot as plt
 
 # 读取数据
-<<<<<<< HEAD
 df = pd.read_csv("data/NYC/2016_traffic/yellow_tripdata_2016-08.csv")
 
 
@@ -41,36 +40,6 @@ def generate_time_range(row):
 df['Time Points'] = df.apply(lambda row: pd.date_range(start=row.name,
                                                        end=row['tpep_dropoff_datetime'],
                                                        freq='5T'), axis=1)
-=======
-df = pd.read_csv("data/Chicago/2016_traffic/Taxi_Trips.csv")
-
-# 将时间戳列转换为 datetime 类型
-df['Trip Start Timestamp'] = pd.to_datetime(df['Trip Start Timestamp'], errors='coerce')
-df['Trip End Timestamp'] = pd.to_datetime(df['Trip End Timestamp'], errors='coerce')
-
-# 过滤数据
-df = df.dropna(subset=['Trip Miles', 'Trip Seconds'])
-df = df[(df['Trip Miles'] > 0) & (df['Trip Seconds'] > 0)]
-
-# 计算速度
-df['Trip Miles_km'] = df['Trip Miles'] * 1.60934
-df['Trip Seconds_h'] = df['Trip Seconds'] / 3600
-df['Speed'] = df['Trip Miles_km'] / df['Trip Seconds_h']
-
-# 过滤异常速度值
-reasonable_speed_threshold = 200
-df = df[df['Speed'] <= reasonable_speed_threshold]
-
-# 定义函数生成时间点范围
-def generate_time_range(row):
-    return pd.date_range(start=row['Trip Start Timestamp'],
-                         end=row['Trip End Timestamp'],
-                         freq='15T')  # 15分钟间隔
-
-# 对每个行程生成时间点范围
-df['Time Points'] = df.apply(generate_time_range, axis=1)
-
->>>>>>> 9031447bc210c4acb967ad00d004c35609829a8d
 # 将DataFrame展开为长格式，每个时间点一行
 expanded_df = df.explode('Time Points')
 
@@ -81,7 +50,6 @@ expanded_df['Time Point Minute'] = expanded_df['Time Points'].dt.minute
 
 # 使用 'Pickup Community Area' 作为区域信息
 result_df = expanded_df[
-<<<<<<< HEAD
     ['Time Points', 'Time Point Date', 'Time Point Hour', 'Time Point Minute', 'PULocationID', 'Speed']
 ]
 
@@ -91,17 +59,6 @@ aggregated_df = result_df.groupby(['Time Points', 'Time Point Date', 'Time Point
 # 将数据转换为每行一个时间点，每列一个区域的DataFrame
 final_df = aggregated_df.pivot_table(index=['Time Point Date', 'Time Point Hour', 'Time Point Minute'],
                                      columns='PULocationID',
-=======
-    ['Time Points', 'Time Point Date', 'Time Point Hour', 'Time Point Minute', 'Pickup Community Area', 'Speed']
-]
-
-# 聚合处理重复项，确保唯一
-aggregated_df = result_df.groupby(['Time Points', 'Time Point Date', 'Time Point Hour', 'Time Point Minute', 'Pickup Community Area']).agg({'Speed': 'mean'}).reset_index()
-
-# 将数据转换为每行一个时间点，每列一个区域的DataFrame
-final_df = aggregated_df.pivot_table(index=['Time Point Date', 'Time Point Hour', 'Time Point Minute'],
-                                     columns='Pickup Community Area',
->>>>>>> 9031447bc210c4acb967ad00d004c35609829a8d
                                      values='Speed',
                                      fill_value=0)
 
@@ -110,20 +67,12 @@ df_array = final_df.values
 df_array = np.nan_to_num(df_array)  # 确保没有 NaN 值
 
 # 设置窗口大小
-<<<<<<< HEAD
 window_size = 24
-=======
-window_size = 24 * 4  # 每15分钟间隔的24小时
->>>>>>> 9031447bc210c4acb967ad00d004c35609829a8d
 
 # 初始化用于存储预测值的数组
 predictions = np.zeros((df_array.shape[0] - window_size, df_array.shape[1]))
 
-<<<<<<< HEAD
 # 计算每个时间点前24个时间点的平均速度
-=======
-# 计算每个时间点前24小时的平均速度
->>>>>>> 9031447bc210c4acb967ad00d004c35609829a8d
 for i in range(window_size, df_array.shape[0]):
     window_data = df_array[i - window_size:i, :]
     predictions[i - window_size] = np.nanmean(window_data, axis=0)
@@ -137,7 +86,6 @@ plt.title('Speed Distribution for Community Area 1')  # Adjust the title to matc
 plt.xlabel('Speed (km/h)')
 plt.ylabel('Frequency')
 plt.show()
-<<<<<<< HEAD
 # 计算MAPE
 def calculate_mape(actuals, predictions):
     non_zero_index = actuals != 0
@@ -174,15 +122,6 @@ def loss_function(actuals, predictions):
 loss = loss_function(actuals, predictions)
 
 print(f"Loss: {loss}")
-=======
-# 计算MSE和MAE
-mse = mean_squared_error(actuals, predictions)
-mae = mean_absolute_error(actuals, predictions)
-
-print(f"Historical Average Model Performance:")
-print(f"Mean Squared Error (MSE): {mse}")
-print(f"Mean Absolute Error (MAE): {mae}")
->>>>>>> 9031447bc210c4acb967ad00d004c35609829a8d
 
 # 绘制预测速度与实际速度对比图
 plt.figure(figsize=(12, 6))

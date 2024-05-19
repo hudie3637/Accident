@@ -25,11 +25,18 @@ class AccidentGraph():
         self.A_road = torch.from_numpy(np.float32(np.load(os.path.join(graph_dir, 'NYC_road.npy')))).to(device)
         self.A_closeness = torch.from_numpy(np.float32(np.load(os.path.join(graph_dir, 'NYC_closeness.npy')))).to(device)
         self.A_pro = torch.from_numpy(np.float32(np.load(os.path.join(graph_dir, 'NYC_propagation_graph.npy')))).to(device)
-        self.A_pro =  self.A_pro.unsqueeze(0).unsqueeze(0)
+        print(self.A_pro.shape)
+        # 重塑张量，这里假设每个样本只有一个通道
 
-        # 使用双线性插值上采样 X3
-        self.A_pro = torch.nn.functional.interpolate(self.A_pro, size=(263, 263), mode='bilinear', align_corners=False)
+        self.A_pro = self.A_pro.unsqueeze(1)  # 增加通道维度，使其成为 [10086, 1, 16, 16]
 
+        # 现在我们可以安全地进行插值操作
+        self.A_pro = torch.nn.functional.interpolate(
+            self.A_pro,
+            size=(263, 263),
+            mode='bilinear',
+            align_corners=False
+        )
 
         self.A_pro =  self.A_pro.squeeze(0).squeeze(0)
         self.node_num = self.A_road.shape[0]
@@ -130,10 +137,6 @@ if __name__ == '__main__':
     graph = AccidentGraph(graph_dir, config_graph, gpu_id)
 
     data_dir = 'data/temporal_data/NYC'
-    for data_type in ['train', 'val', 'test']:
-        file_path = os.path.join(data_dir, f"{data_type}.npz")
-        with np.load(file_path, allow_pickle=True) as data:
-            print(f"{data_type} dataset: x shape = {data['x'].shape}, y shape = {data['y'].shape}")
     for data_type in ['train', 'val', 'test']:
         file_path = os.path.join(data_dir, f"{data_type}.npz")
         with np.load(file_path, allow_pickle=True) as data:

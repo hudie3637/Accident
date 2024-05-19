@@ -55,7 +55,7 @@ hyperparameter_defaults = dict(
     train=dict(
         seed=0,
         epoch=1,
-        batch_size=32,
+        batch_size=64,
         lr=1e-4,
         weight_decay=1e-4,
         M=24,
@@ -73,7 +73,6 @@ gpu_id = config['server']['gpu_id']
 device = 'cuda:%d' % gpu_id if torch.cuda.is_available() else 'cpu'
 
 root_dir = 'data'
-<<<<<<< HEAD
 data_dir = os.path.join(root_dir, 'temporal_data/NYC')
 graph_dir = os.path.join(root_dir, 'NYC')
 train_set = Accident(data_dir, 'train')
@@ -81,15 +80,6 @@ val_set = Accident(data_dir, 'val')
 test_set = Accident(data_dir, 'test')
 
 graph = AccidentGraph(graph_dir, config['graph'], gpu_id)
-=======
-chi_data_dir = os.path.join(root_dir, 'temporal_data/Chicago')
-chi_graph_dir = os.path.join(root_dir, 'Chicago')
-train_set = Accident(chi_data_dir, 'train')
-val_set = Accident(chi_data_dir, 'val')
-test_set = Accident(chi_data_dir, 'test')
-
-graph = AccidentGraph(chi_graph_dir, config['graph'], gpu_id)
->>>>>>> 9031447bc210c4acb967ad00d004c35609829a8d
 
 scaler = train_set.scaler
 
@@ -102,15 +92,15 @@ class LightningData(LightningDataModule):
         self.test_set = test_set
 
     def train_dataloader(self):
-        return DataLoader(self.train_set, batch_size=self.batch_size, shuffle=True, num_workers=4,
+        return DataLoader(self.train_set, batch_size=self.batch_size, shuffle=True, num_workers=6,
                                    pin_memory=True, drop_last=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val_set, batch_size=self.batch_size, shuffle=False, num_workers=4,
+        return DataLoader(self.val_set, batch_size=self.batch_size, shuffle=False, num_workers=6,
                                  pin_memory=True, drop_last=True)
 
     def test_dataloader(self):
-        return DataLoader(self.test_set, batch_size=self.batch_size, shuffle=False, num_workers=4,
+        return DataLoader(self.test_set, batch_size=self.batch_size, shuffle=False, num_workers=6,
                                   pin_memory=True, drop_last=True)
 
 

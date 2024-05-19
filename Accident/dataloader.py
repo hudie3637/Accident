@@ -61,7 +61,6 @@ def generate_graph_seq2seq_io_data(
 
 def generate_train_val_test(args):
     seq_length_x, seq_length_y = args.seq_length_x, args.seq_length_y
-
     column_names = ['tpep_pickup_datetime', 'tpep_dropoff_datetime', 'trip_distance',
                     'PULocationID']
     df = pd.read_csv(args.traffic_df_filename, usecols=column_names)
@@ -98,8 +97,6 @@ def generate_train_val_test(args):
     df['Time Points'] = df.apply(lambda row: pd.date_range(start=row.name,
                                                            end=row['tpep_dropoff_datetime'],
                                                            freq='5T'), axis=1)
-
-
     # 将DataFrame展开为长格式，每个时间点一行
     expanded_df = df.explode('Time Points')
 
@@ -109,33 +106,24 @@ def generate_train_val_test(args):
     expanded_df['Time Point Minute'] = expanded_df['Time Points'].dt.minute
 
 
-
     result_df = expanded_df[
         ['Time Points', 'Time Point Date', 'Time Point Hour', 'Time Point Minute', 'PULocationID', 'Speed']
     ]
     # 聚合处理重复项，确保唯一
     aggregated_df = result_df.groupby(
         ['Time Points', 'Time Point Date', 'Time Point Hour', 'Time Point Minute', 'PULocationID']).agg(
-
         {'Speed': 'mean'}).reset_index()
 
     # 将数据转换为每行一个时间点，每列一个区域的DataFrame
     final_df = aggregated_df.pivot_table(index=['Time Point Date', 'Time Point Hour', 'Time Point Minute'],
-<<<<<<< HEAD
                                          columns='PULocationID',
-=======
-                                         columns='Pickup Community Area',
->>>>>>> 9031447bc210c4acb967ad00d004c35609829a8d
                                          values='Speed',
                                          fill_value=0)
 
     # 转换为 numpy 数组
     df_array = final_df.values
     df_array = np.nan_to_num(df_array)  # 确保没有 NaN 值
-<<<<<<< HEAD
     # 假设 df 是您的 DataFrame
-=======
->>>>>>> 9031447bc210c4acb967ad00d004c35609829a8d
 
     x_offsets = np.sort(np.concatenate((np.arange(-(seq_length_x - 1), 1, 1),)))
     # Predict the next one hour
