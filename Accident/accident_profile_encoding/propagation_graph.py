@@ -27,7 +27,7 @@ representative_embedding = np.mean(accident_embeddings, axis=0)
 
 # 使用代表性的嵌入生成传播图
 propagation_matrix = mlp_forward(representative_embedding, Wproj1, bproj1, Wproj2, bproj2)
-
+print(propagation_matrix.shape)
 # 确保传播图是方阵
 assert propagation_matrix.shape[0] == propagation_matrix.shape[1], "传播图不是方阵"
 
