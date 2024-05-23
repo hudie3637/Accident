@@ -46,9 +46,9 @@ class AccidentGraph():
 
     def get_fix_weight(self):
         return (
-               self.A_road * 0.1 + \
-               self.A_closeness * 0.5 + \
-               self.A_pro * 0.4) / 3
+               self.A_road * 0.2 + \
+               self.A_closeness * 0.2 + \
+               self.A_pro * 0.6) / 3
 
     def get_graph(self, name):
         if name == 'road':

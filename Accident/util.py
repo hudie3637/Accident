@@ -45,18 +45,33 @@ def masked_mae(preds, labels, null_val=np.nan):
 
 
 def masked_mape(preds, labels, null_val=np.nan):
+    # 过滤掉 null_val 值或者 NaN 值
     if np.isnan(null_val):
         mask = ~torch.isnan(labels)
     else:
-        mask = (labels!=null_val)
-    mask = mask.float()
-    mask /= torch.mean((mask))
-    mask = torch.where(torch.isnan(mask), torch.zeros_like(mask), mask)
-    loss = torch.abs(preds-labels)/labels
-    loss = loss * mask
-    loss = torch.where(torch.isnan(loss), torch.zeros_like(loss), loss)
-    return torch.mean(loss)
+        mask = (labels != null_val)
 
+    # 过滤掉无效的标签值
+    filtered_labels = labels[mask]  # 直接使用布尔索引
+    filtered_preds = preds[mask]  # 添加这行代码以过滤预测值
+
+    # 计算预测和标签之间的绝对误差
+    error = torch.abs(filtered_preds - filtered_labels)
+
+    # 避免除以零，这里假设 labels 中没有 0
+    non_zero_mask = (filtered_labels > 0)
+    error = error[non_zero_mask]
+    filtered_labels = filtered_labels[non_zero_mask]
+
+    # 计算 MAPE
+    if torch.sum(non_zero_mask) == 0:  # 添加这行代码以避免除以零的错误
+        return torch.tensor(0.0)  # 或者返回 None，或者抛出异常
+    loss = error / filtered_labels
+
+    # 计算平均 MAPE
+    mean_loss = torch.mean(loss)
+
+    return mean_loss
 
 def metric(pred, real):
     # 确保 pred 和 real 的尺寸一致

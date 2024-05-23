@@ -1,6 +1,7 @@
 # For relative import
 import os
 import sys
+from pytorch_lightning.callbacks import ModelCheckpoint
 
 from matplotlib import pyplot as plt, dates
 
@@ -12,7 +13,7 @@ PROJ_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(PROJ_DIR)
 print(PROJ_DIR)
 import argparse
-
+from pytorch_lightning import seed_everything
 
 from torch import nn
 from torch.nn import functional as F
@@ -53,7 +54,7 @@ hyperparameter_defaults = dict(
     ),
 
     train=dict(
-        seed=0,
+        seed=10,
         epoch=1,
         batch_size=32,
         lr=1e-4,
@@ -67,8 +68,7 @@ hyperparameter_defaults = dict(
 
 config = hyperparameter_defaults
 #
-# pl.utilities.seed.seed_everything(config['train']['seed'])
-
+torch.manual_seed(config['train']['seed'])
 gpu_id = config['server']['gpu_id']
 device = 'cuda:%d' % gpu_id if torch.cuda.is_available() else 'cpu'
 
@@ -92,15 +92,15 @@ class LightningData(LightningDataModule):
         self.test_set = test_set
 
     def train_dataloader(self):
-        return DataLoader(self.train_set, batch_size=self.batch_size, shuffle=True, num_workers=0,
+        return DataLoader(self.train_set, batch_size=self.batch_size, shuffle=True, num_workers=8,
                                    pin_memory=True, drop_last=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val_set, batch_size=self.batch_size, shuffle=False, num_workers=0,
+        return DataLoader(self.val_set, batch_size=self.batch_size, shuffle=False, num_workers=8,
                                  pin_memory=True, drop_last=True)
 
     def test_dataloader(self):
-        return DataLoader(self.test_set, batch_size=self.batch_size, shuffle=False, num_workers=0,
+        return DataLoader(self.test_set, batch_size=self.batch_size, shuffle=False, num_workers=8,
                                   pin_memory=True, drop_last=True)
 
 
@@ -109,7 +109,7 @@ class LightningModel(LightningModule):
         super().__init__()
 
         self.scaler = scaler
-        self.fusiongraph = fusiongraph
+        self.fusiongraph = fusiongraph.to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
         self.metric_lightning = LightningMetric()
 
@@ -122,6 +122,8 @@ class LightningModel(LightningModule):
             num_for_predict=config['data']['pred_len'],
             hidden_size=config['data']['hidden_size'],
         )
+        self.model.to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+
         for p in self.model.parameters():
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
@@ -131,25 +133,30 @@ class LightningModel(LightningModule):
         # self.log_dict(config)
 
     def forward(self, x):
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        x = x.to(device)
+
         print(f'LightningModel x{x.shape}')
         return self.model(x)
 
     def _run_model(self, batch):
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
         x, y = batch
         y = y[:, 0, :, :]
         print(f"y: {y.shape}")
         # 确保输入数据需要梯度
-        x = x.requires_grad_()
-        print(f"Input to model (x) shape: {x.shape}")
+        x = x.requires_grad_().to(device)
+        y = y.to(device)
         y_hat = self(x)
-        print(f"Output from model: {y_hat.shape}")
+        # print(f"Output from model: {y_hat.shape}")
 
         # 逆变换回原始尺度
         y_hat = self.scaler.inverse_transform(y_hat.detach().cpu())
         # print(f"y_hat after inverse transform: {y_hat.shape}")
         # y = y.squeeze(1)  # 移除第二维
 
-        print(f"y_hat: {y_hat.shape}")
+        # print(f"y_hat: {y_hat.shape}")
 
         # 检查 y 的新形状是否与 y_hat 匹配
         if y.shape != y_hat.shape:
@@ -184,17 +191,22 @@ class LightningModel(LightningModule):
         return Adam(self.parameters(), lr=config['train']['lr'], weight_decay=config['train']['weight_decay'])
 
 
+
+
+
 def main():
 
     fusiongraph = FusionGraphModel(graph, gpu_id, config['graph'], config['data'], config['train']['M'], config['train']['d'], config['train']['bn_decay'])
+    fusiongraph = fusiongraph.to(device)
 
     lightning_data = LightningData(train_set, val_set, test_set)
 
     lightning_model = LightningModel(scaler, fusiongraph)
+    lightning_model.to(device)
 
     trainer = Trainer(
-        accelerator='cpu',
-        # gpus=[gpu_id],
+        accelerator='cpu',  # 指定使用 GPU
+        devices=1,  # 指定使用 1 个设备
         max_epochs=config['train']['epoch'],
         # TODO
         # precision=16,
@@ -202,7 +214,6 @@ def main():
 
     trainer.fit(lightning_model, lightning_data)
     trainer.test(lightning_model, datamodule=lightning_data)
-
 
     # 打印使用的图和数据配置
     print('Graph USE', config['graph']['use'])
