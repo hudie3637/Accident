@@ -55,7 +55,7 @@ hyperparameter_defaults = dict(
 
     train=dict(
         seed=10,
-        epoch=1,
+        epoch=50,
         batch_size=32,
         lr=1e-4,
         weight_decay=1e-4,
@@ -205,7 +205,7 @@ def main():
     lightning_model.to(device)
 
     trainer = Trainer(
-        accelerator='cpu',  # 指定使用 GPU
+        accelerator='gpu',  # 指定使用 GPU
         devices=1,  # 指定使用 1 个设备
         max_epochs=config['train']['epoch'],
         # TODO
