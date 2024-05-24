@@ -1,0 +1,155 @@
+import numpy as np
+import pandas as pd
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+import matplotlib.pyplot as plt
+
+# 读取数据
+df = pd.read_csv("data/NYC/2016_traffic/yellow_tripdata_2016-08.csv")
+
+
+# 将时间列转换为 datetime 类型并设置为索引
+df['tpep_pickup_datetime'] = pd.to_datetime(df['tpep_pickup_datetime'], format='%Y/%m/%d %H:%M')
+# traffic_df.set_index('tpep_pickup_datetime', inplace=True)
+df['tpep_dropoff_datetime'] = pd.to_datetime(df['tpep_dropoff_datetime'], format='%Y/%m/%d %H:%M')
+# 清洗数据
+df = df.dropna(subset=['trip_distance'])
+df = df[(df['trip_distance'] > 0) ]
+# print(traffic_df.columns)
+# 计算时间差（秒）
+df['Trip Seconds'] = (df['tpep_dropoff_datetime'] - df['tpep_pickup_datetime']).dt.total_seconds()
+df.set_index('tpep_pickup_datetime', inplace=True)
+
+# 确保 'Trip Seconds' 列不包含 NaN 或负值
+df = df[df['Trip Seconds'] > 0]
+
+# 计算速度（公里/小时）
+df['Speed'] = df['trip_distance'] * 1.60934 / (df['Trip Seconds'] / 3600)
+
+df = df[df['Speed'] <= 200]  # 过滤异常速度值
+
+
+# 定义函数生成时间点范围
+def generate_time_range(row):
+    start = row.name  # 使用row.name来获取索引的日期时间
+    end = row['tpep_dropoff_datetime']
+    return pd.date_range(start=start,
+                         end=end,
+                         freq='5T')  # 5分钟间隔
+
+# 对每个行程生成时间点范围
+df['Time Points'] = df.apply(lambda row: pd.date_range(start=row.name,
+                                                       end=row['tpep_dropoff_datetime'],
+                                                       freq='5T'), axis=1)
+# 将DataFrame展开为长格式，每个时间点一行
+expanded_df = df.explode('Time Points')
+
+# 提取时间点的日期和小时
+expanded_df['Time Point Date'] = expanded_df['Time Points'].dt.date
+expanded_df['Time Point Hour'] = expanded_df['Time Points'].dt.hour
+expanded_df['Time Point Minute'] = expanded_df['Time Points'].dt.minute
+
+# 使用 'Pickup Community Area' 作为区域信息
+result_df = expanded_df[
+    ['Time Points', 'Time Point Date', 'Time Point Hour', 'Time Point Minute', 'PULocationID', 'Speed']
+]
+
+# 聚合处理重复项，确保唯一
+aggregated_df = result_df.groupby(['Time Points', 'Time Point Date', 'Time Point Hour', 'Time Point Minute', 'PULocationID']).agg({'Speed': 'mean'}).reset_index()
+
+# 将数据转换为每行一个时间点，每列一个区域的DataFrame
+final_df = aggregated_df.pivot_table(index=['Time Point Date', 'Time Point Hour', 'Time Point Minute'],
+                                     columns='PULocationID',
+                                     values='Speed',
+                                     fill_value=0)
+
+# Function to fill zeros with the mean of the previous day
+def fill_with_previous_day_mean(df):
+    for column in df.columns:
+        # Calculating the mean speed of the previous day for each hour and minute
+        df[column] = df[column].replace(0, pd.NA).fillna(method='ffill').fillna(method='bfill')
+    return df
+
+final_df = fill_with_previous_day_mean(final_df)
+
+# Function to fill remaining zeros using a rolling mean
+def fill_with_rolling_mean(df, window_size=7):
+    for column in df.columns:
+        df[column] = df[column].rolling(window=window_size, min_periods=1).mean().fillna(method='bfill')
+    return df
+
+final_df = fill_with_rolling_mean(final_df)
+
+# Calculate global mean and fill any remaining missing values
+global_mean = final_df.mean().mean()  # average speed across all times and areas
+final_df = final_df.fillna(global_mean)
+
+# Preparing the data array for predictions
+df_array = final_df.values
+
+# 设置窗口大小
+window_size = 24
+
+# 初始化用于存储预测值的数组
+predictions = np.zeros((df_array.shape[0] - window_size, df_array.shape[1]))
+
+# 计算每个时间点前24个时间点的平均速度
+for i in range(window_size, df_array.shape[0]):
+    window_data = df_array[i - window_size:i, :]
+    predictions[i - window_size] = np.nanmean(window_data, axis=0)
+
+# 真实值
+actuals = df_array[window_size:]
+# 绘制第一个社区区域的速度直方图
+plt.figure(figsize=(10, 6))
+plt.hist(actuals[:, 0], bins=100, color='blue', edgecolor='black')
+plt.title('Speed Distribution for Community Area 1')  # Adjust the title to match the area index
+plt.xlabel('Speed (km/h)')
+plt.ylabel('Frequency')
+plt.show()
+# 计算MAPE
+def calculate_mape(actuals, predictions):
+    non_zero_index = actuals != 0
+    absolute_errors = np.abs((actuals - predictions)[non_zero_index])
+    actual_values = actuals[non_zero_index]
+    return np.mean(absolute_errors / actual_values)
+
+# 计算RMSE
+def calculate_rmse(actuals, predictions):
+    squared_errors = np.square(actuals - predictions)
+    return np.sqrt(np.mean(squared_errors))
+# 计算MSE和MAE
+
+mae = mean_absolute_error(actuals, predictions)
+
+print(f"Historical Average Model Performance:")
+print(f"MAE: {mae}")
+
+
+# 计算MAPE
+mape = calculate_mape(actuals, predictions)
+
+# 计算RMSE
+rmse = calculate_rmse(actuals, predictions)
+
+print(f"MAPE: {mape}")
+print(f"RMSE: {rmse}")
+
+# 损失函数（通常用于机器学习模型，这里我们使用MSE作为示例）
+def loss_function(actuals, predictions):
+    return mean_squared_error(actuals, predictions)
+
+# 计算损失
+loss = loss_function(actuals, predictions)
+
+print(f"Loss: {loss}")
+
+# 绘制预测速度与实际速度对比图
+plt.figure(figsize=(12, 6))
+plt.plot(predictions[:, 0], label='Predicted Speeds for Community Area 1', color='orange')
+plt.plot(actuals[:, 0], label='Actual Speeds for Community Area 1', color='blue')
+plt.axhline(y=np.mean(actuals[:, 0]), color='r', linestyle='--', label=f'Overall Average Speed of Community Area 1')
+plt.legend()
+plt.title('Historical Average Model Predictions vs Actual Speeds for Community Area 1')
+plt.xlabel('Time Window')
+plt.ylabel('Average Speed (km/h)')
+plt.show()

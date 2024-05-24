@@ -68,14 +68,14 @@ class cheb_conv(nn.Module):
         #print(f'cheb_conv x{x.shape}')
         adj_for_run = self.fusiongraph()
         adj_for_run = adj_for_run.to(self.DEVICE)
-
         edge_idx, edge_attr = dense_to_sparse(adj_for_run)
         # edge_idx_l, edge_attr_l = get_laplacian(edge_idx, edge_attr, 'sym')
         edge_idx_l, edge_attr_l = get_laplacian(edge_idx, edge_attr)
 
+        # 在 cheb_conv 类的 forward 方法中
         L_tilde = to_dense_adj(edge_idx_l, edge_attr=edge_attr_l)[0]
+        # 确保 L_tilde 在正确的设备上
         L_tilde = L_tilde.to(self.DEVICE)
-
         cheb_polynomials = cheb_polynomial_torch(L_tilde, self.K)
 
         batch_size,  num_of_vertices,in_channels, num_of_timesteps = x.shape
@@ -94,9 +94,9 @@ class cheb_conv(nn.Module):
                 T_k = cheb_polynomials[k]  # (N,N)
 
                 theta_k = self.Theta[k]  # (in_channel, out_channel)
-               # print(f'T_k{T_k.shape}')
-               # print(f'graph_signal{graph_signal.shape}')
-                #print(f'theta_k{theta_k.shape}')
+                # print(f'T_k{T_k.shape}')
+                # print(f'graph_signal{graph_signal.shape}')
+                # print(f'theta_k{theta_k.shape}')
                 rhs = graph_signal.permute(0, 2, 1).matmul(T_k).permute(0, 2, 1)
                # print(f'rhs{rhs.shape}')
                 h = rhs.matmul(theta_k)
@@ -135,7 +135,6 @@ class GTAMN_block(nn.Module):
         self.residual_conv = nn.Conv2d(in_channels, nb_time_filter, kernel_size=(1, 1), stride=(1, time_strides))
         self.ln = nn.LayerNorm(nb_time_filter)
         self.device =  device
-
     def forward(self, x):
         '''
         :param x: (batch_size, N, F_in, T)
@@ -163,8 +162,7 @@ class GTAMN_block(nn.Module):
 class GTAMN_submodule(nn.Module):
     def __init__(self, gpu_id, fusiongraph, in_channels, len_input, num_for_predict, hidden_size):
         super(GTAMN_submodule, self).__init__()
-        device = 'cuda:%d' % gpu_id if torch.cuda.is_available() else 'cpu'
-        self.device = device
+        self.device = torch.device(f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu")
         self.fusiongraph = fusiongraph.to(self.device)
 
         K = 3
@@ -172,6 +170,8 @@ class GTAMN_submodule(nn.Module):
         nb_chev_filter = 24
         nb_time_filter = 24
         time_strides = 1
+
+
         self.BlockList = nn.ModuleList([
             GTAMN_block(in_channels, K, nb_chev_filter, nb_time_filter, time_strides, fusiongraph, self.device)
         ])
@@ -182,11 +182,12 @@ class GTAMN_submodule(nn.Module):
             for _ in range(nb_block - 1)
         ])
 
+
         self.final_conv = nn.Conv2d(nb_time_filter, num_for_predict, kernel_size=(1, 1))
         # self.rnn = RNNLayer(nb_time_filter, hidden_size, hidden_size, num_rnn_layers)
         # self.regression_mlp = nn.Linear(hidden_size, num_for_predict)
 
-        self.to(self.device)
+
 
     def forward(self, x):
         '''

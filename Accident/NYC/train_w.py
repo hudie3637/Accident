@@ -1,7 +1,6 @@
 # For relative import
 import os
 import sys
-from pytorch_lightning.callbacks import ModelCheckpoint
 
 from matplotlib import pyplot as plt, dates
 
@@ -13,7 +12,7 @@ PROJ_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(PROJ_DIR)
 print(PROJ_DIR)
 import argparse
-from pytorch_lightning import seed_everything
+
 
 from torch import nn
 from torch.nn import functional as F
@@ -49,12 +48,12 @@ hyperparameter_defaults = dict(
         in_dim=24,
         hist_len=24,
         pred_len=1,
-        type='chi',
+        type='nyc',
         hidden_size = 128  ,
     ),
 
     train=dict(
-        seed=10,
+        seed=0,
         epoch=50,
         batch_size=32,
         lr=1e-4,
@@ -68,18 +67,19 @@ hyperparameter_defaults = dict(
 
 config = hyperparameter_defaults
 #
-torch.manual_seed(config['train']['seed'])
+# pl.utilities.seed.seed_everything(config['train']['seed'])
+
 gpu_id = config['server']['gpu_id']
 device = 'cuda:%d' % gpu_id if torch.cuda.is_available() else 'cpu'
 
 root_dir = 'data'
-chi_data_dir = os.path.join(root_dir, 'temporal_data/Chicago')
-chi_graph_dir = os.path.join(root_dir, 'Chicago')
-train_set = Accident(chi_data_dir, 'train')
-val_set = Accident(chi_data_dir, 'val')
-test_set = Accident(chi_data_dir, 'test')
+data_dir = os.path.join(root_dir, 'temporal_data/NYC')
+graph_dir = os.path.join(root_dir, 'NYC')
+train_set = Accident(data_dir, 'train')
+val_set = Accident(data_dir, 'val')
+test_set = Accident(data_dir, 'test')
 
-graph = AccidentGraph(chi_graph_dir, config['graph'], gpu_id)
+graph = AccidentGraph(graph_dir, config['graph'], gpu_id)
 
 scaler = train_set.scaler
 
@@ -107,10 +107,8 @@ class LightningData(LightningDataModule):
 class LightningModel(LightningModule):
     def __init__(self, scaler, fusiongraph):
         super().__init__()
-
         self.scaler = scaler
         self.fusiongraph = fusiongraph.to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
-
         self.metric_lightning = LightningMetric()
 
         self.loss = nn.L1Loss(reduction='mean')
@@ -123,49 +121,34 @@ class LightningModel(LightningModule):
             hidden_size=config['data']['hidden_size'],
         )
         self.model.to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
-
         for p in self.model.parameters():
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
             else:
                 nn.init.uniform_(p)
 
-        # self.log_dict(config)
-
     def forward(self, x):
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         x = x.to(device)
-
         print(f'LightningModel x{x.shape}')
         return self.model(x)
 
     def _run_model(self, batch):
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
         x, y = batch
         y = y[:, 0, :, :]
-        print(f"y: {y.shape}")
-        # 确保输入数据需要梯度
         x = x.requires_grad_().to(device)
         y = y.to(device)
         y_hat = self(x)
-        # print(f"Output from model: {y_hat.shape}")
+        y_hat = self.scaler.inverse_transform(y_hat.detach())
+        y_hat = torch.tensor(y_hat, device=device, requires_grad=True)
 
-        # 逆变换回原始尺度
-        y_hat = self.scaler.inverse_transform(y_hat.detach().cpu())
-        # print(f"y_hat after inverse transform: {y_hat.shape}")
-        # y = y.squeeze(1)  # 移除第二维
-
-        # print(f"y_hat: {y_hat.shape}")
-
-        # 检查 y 的新形状是否与 y_hat 匹配
         if y.shape != y_hat.shape:
             raise ValueError(f"The shapes of y_hat {y_hat.shape} and y {y.shape} do not match")
-        y_hat = torch.tensor(y_hat, device=self.device, requires_grad=True)
-        y = y.to(self.device)
-
+        y_hat = torch.tensor(y_hat, device=device, requires_grad=True)
         loss = masked_mae(y_hat, y, 0.0)
         return y_hat, y, loss
+
 
     def training_step(self, batch, batch_idx):
         y_hat, y, loss = self._run_model(batch)
@@ -178,7 +161,7 @@ class LightningModel(LightningModule):
 
     def test_step(self, batch, batch_idx):
         y_hat, y, loss = self._run_model(batch)
-        # print(f"y_hat: {y_hat},y{y}")
+        print(f"y_hat: {y_hat},y{y}")
 
         self.metric_lightning(y_hat.cpu(), y.cpu())
         self.log('test_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
@@ -191,22 +174,18 @@ class LightningModel(LightningModule):
         return Adam(self.parameters(), lr=config['train']['lr'], weight_decay=config['train']['weight_decay'])
 
 
-
-
-
 def main():
 
     fusiongraph = FusionGraphModel(graph, gpu_id, config['graph'], config['data'], config['train']['M'], config['train']['d'], config['train']['bn_decay'])
     fusiongraph = fusiongraph.to(device)
-
     lightning_data = LightningData(train_set, val_set, test_set)
 
     lightning_model = LightningModel(scaler, fusiongraph)
     lightning_model.to(device)
-
     trainer = Trainer(
         accelerator='gpu',  # 指定使用 GPU
         devices=1,  # 指定使用 1 个设备
+
         max_epochs=config['train']['epoch'],
         # TODO
         # precision=16,
@@ -214,6 +193,7 @@ def main():
 
     trainer.fit(lightning_model, lightning_data)
     trainer.test(lightning_model, datamodule=lightning_data)
+
 
     # 打印使用的图和数据配置
     print('Graph USE', config['graph']['use'])
