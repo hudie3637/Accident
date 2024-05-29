@@ -1,231 +1,217 @@
-# For relative import
 import os
 import sys
-from pytorch_lightning.callbacks import ModelCheckpoint
-
+import torch
+import argparse
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
 from matplotlib import pyplot as plt, dates
 
 from GTAMN import GTAMN_submodule
 from accident import Accident, AccidentGraph
 from fusion_graph import FusionGraphModel
+import wandb
 
+# Setup for project directory
 PROJ_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(PROJ_DIR)
-print(PROJ_DIR)
-import argparse
-from pytorch_lightning import seed_everything
 
-from torch import nn
-from torch.nn import functional as F
-from torch.optim import Adam
-import torch.optim as optim
-from torch.utils.data import DataLoader
-import pytorch_lightning as pl
-from pytorch_lightning import LightningDataModule, LightningModule, Trainer
-from pytorch_lightning.loggers import WandbLogger
-import wandb
+# Import utility functions
+from util import *
+
 api_key = "6904b03128d41d459604351aa46ecd82866be0a8"
 wandb.login(key=api_key)
 
+# Configuration dictionary
+config = {
+    'server': {'gpu_id': 0},
+    'graph': {
+        'use': ['road', 'closeness','pro'],
+        'fix_weight': False,
+        'matrix_weight': True,
+        'attention': True
+    },
+    'data': {
+        'in_dim': 24,
+        'hist_len': 24,
+        'pred_len': 1,
+        'type': 'nyc',
+        'hidden_size': 128
+    },
+    'train': {
+        'seed': 0,
+        'epochs': 100,
+        'batch_size': 16,
+        'lr': 1e-3,
+        'weight_decay': 1e-4,
+        'M': 24,
+        'd': 6,
+        'bn_decay': 0.1
+    }
+}
 
-
-from util import *
-
-
-parser = argparse.ArgumentParser()
-args = parser.parse_args()
-gpu_num = 0
-os.environ['WANDB_MODE'] = 'online'
-
-
-hyperparameter_defaults = dict(
-    server=dict(
-        gpu_id=0,
-    ),
-    graph=dict(
-        use=['road', 'closeness', 'pro'],
-        fix_weight=False,                                   # if True, the weight of each graph is fixed.
-        matrix_weight=True,                                 # if True, turn the weight matrices trainable.
-        attention=True,                                    # if True, the SG-ATT is used.
-    ),
-
-    data=dict(
-        in_dim=24,
-        hist_len=24,
-        pred_len=1,
-        type='chi',
-        hidden_size = 128  ,
-    ),
-
-    train=dict(
-        seed=10,
-        epoch=50,
-        batch_size=64,
-        lr=1e-8,
-        weight_decay=1e-8,
-        M=24,
-        d=6,
-        bn_decay=0.1,
-    )
-)
-wandb_proj = 'accident'
-wandb.init(config=hyperparameter_defaults, project=wandb_proj)
-wandb_logger = WandbLogger()
+# Initialize WandB
+wandb.init(project='accident_analysis', config=config)
 config = wandb.config
 
-
 #
-torch.manual_seed(config['train']['seed'])
+# pl.utilities.seed.seed_everything(config['train']['seed'])
+
 gpu_id = config['server']['gpu_id']
 device = 'cuda:%d' % gpu_id if torch.cuda.is_available() else 'cpu'
+torch.manual_seed(config['train']['seed'])
 
 root_dir = 'data'
-chi_data_dir = os.path.join(root_dir, 'temporal_data/Chicago')
-chi_graph_dir = os.path.join(root_dir, 'Chicago')
-train_set = Accident(chi_data_dir, 'train')
-val_set = Accident(chi_data_dir, 'val')
-test_set = Accident(chi_data_dir, 'test')
+data_dir = os.path.join(root_dir, 'temporal_data/NYC')
+graph_dir = os.path.join(root_dir, 'NYC')
 
-graph = AccidentGraph(chi_graph_dir, config['graph'], gpu_id)
+train_set = Accident(data_dir, 'train')
+val_set = Accident(data_dir, 'val')
+test_set = Accident(data_dir, 'test')
 
-scaler = train_set.scaler
-
-class LightningData(LightningDataModule):
-    def __init__(self, train_set, val_set, test_set):
-        super().__init__()
-        self.batch_size = config['train']['batch_size']
-        self.train_set = train_set
-        self.val_set = val_set
-        self.test_set = test_set
-
-    def train_dataloader(self):
-        return DataLoader(self.train_set, batch_size=self.batch_size, shuffle=True, num_workers=8,
-                                   pin_memory=True, drop_last=True)
-
-    def val_dataloader(self):
-        return DataLoader(self.val_set, batch_size=self.batch_size, shuffle=False, num_workers=8,
-                                 pin_memory=True, drop_last=True)
-
-    def test_dataloader(self):
-        return DataLoader(self.test_set, batch_size=self.batch_size, shuffle=False, num_workers=8,
-                                  pin_memory=True, drop_last=True)
+graph = AccidentGraph(graph_dir, config['graph'], gpu_id)
 
 
-class LightningModel(LightningModule):
+# DataLoader class
+class AccidentDataLoader:
+    def __init__(self, dataset, batch_size, shuffle, num_workers, pin_memory, drop_last):
+        self.dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle,
+                                     num_workers=num_workers, pin_memory=pin_memory, drop_last=drop_last)
+
+    def __iter__(self):
+        return iter(self.dataloader)
+
+    def __len__(self):
+        return len(self.dataloader)  # This returns the number of batches in the DataLoader
+
+
+# Model class
+class AccidentModel(nn.Module):
     def __init__(self, scaler, fusiongraph):
         super().__init__()
-
         self.scaler = scaler
-        self.fusiongraph = fusiongraph.to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
-
-        self.metric_lightning = LightningMetric()
-
-        self.loss = nn.L1Loss(reduction='mean')
+        self.fusiongraph = fusiongraph
+        self.loss_fn = nn.L1Loss(reduction='mean')
         self.model = GTAMN_submodule(
-            gpu_id=gpu_id,
+            gpu_id=config['server']['gpu_id'],
             fusiongraph=fusiongraph,
             in_channels=config['data']['in_dim'],
             len_input=config['data']['hist_len'],
             num_for_predict=config['data']['pred_len'],
             hidden_size=config['data']['hidden_size'],
         )
-        self.model.to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+        self.model.to(device)
 
-        for p in self.model.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
-            else:
-                nn.init.uniform_(p)
-
-        self.log("gpu_id", gpu_id)
     def forward(self, x):
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        x = x.to(device)
-
-        print(f'LightningModel x{x.shape}')
         return self.model(x)
 
-    def _run_model(self, batch):
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    def loss(self, y_hat, y):
+        return self.loss_fn(y_hat, y)
 
+
+# Helper functions for metrics
+def mean_absolute_error(y_true, y_pred):
+    return np.mean(np.abs(y_true - y_pred))
+
+
+def mean_absolute_percentage_error(y_true, y_pred):
+    return np.mean(np.abs((y_true - y_pred) / np.clip(y_true, 1e-6, None))) * 100
+
+
+def root_mean_squared_error(y_true, y_pred):
+    return np.sqrt(np.mean((y_true - y_pred) ** 2))
+
+# Training function
+
+def train_model(model, train_loader, optimizer):
+    model.train()
+    total_loss = 0
+    for batch in train_loader:
         x, y = batch
         y = y[:, 0, :, :]
-        print(f"y: {y.shape}")
-        # 确保输入数据需要梯度
-        x = x.requires_grad_().to(device)
-        y = y.to(device)
-        y_hat = self(x)
-        # print(f"Output from model: {y_hat.shape}")
+        x, y = x.to(device), y.to(device)
+        optimizer.zero_grad()
+        y_hat = model(x)
+        loss = model.loss(y_hat, y)
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+        wandb.log({"train_loss": loss.item()})
+    return total_loss / len(train_loader)
 
-        # 逆变换回原始尺度
-        y_hat = self.scaler.inverse_transform(y_hat.detach().cpu())
-        # print(f"y_hat after inverse transform: {y_hat.shape}")
-        # y = y.squeeze(1)  # 移除第二维
+# Validation function
+def validate_model(model, val_loader):
+    model.eval()
+    total_loss = 0
+    with torch.no_grad():
+        for batch in val_loader:
+            x, y = batch
+            y = y[:, 0, :, :]
+            x, y = x.to(device), y.to(device)
+            y_hat = model(x)
+            loss = model.loss(y_hat, y)
+            total_loss += loss.item()
+            wandb.log({"val_loss": loss.item()})
+    return total_loss / len(val_loader)
+def test_model(model, test_loader):
+    model.eval()
+    total_loss = 0
+    mae_sum = 0
+    mape_sum = 0
+    rmse_sum = 0
+    num_batches = len(test_loader)
+    with torch.no_grad():
+        for batch in test_loader:
+            x, y = batch
+            y = y[:, 0, :, :]
+            x, y = x.to(device), y.to(device)
+            y_hat = model(x)
+            loss = model.loss(y_hat, y)
+            total_loss += loss.item()
 
-        # print(f"y_hat: {y_hat.shape}")
+            # Calculate metrics using numpy
+            y_np = y.cpu().numpy()
+            y_hat_np = y_hat.cpu().numpy()
+            mae_sum += mean_absolute_error(y_np, y_hat_np)
+            mape_sum += mean_absolute_percentage_error(y_np, y_hat_np)
+            rmse_sum += root_mean_squared_error(y_np, y_hat_np)
 
-        # 检查 y 的新形状是否与 y_hat 匹配
-        if y.shape != y_hat.shape:
-            raise ValueError(f"The shapes of y_hat {y_hat.shape} and y {y.shape} do not match")
-        y_hat = torch.tensor(y_hat, device=self.device, requires_grad=True)
-        y = y.to(self.device)
+    avg_loss = total_loss / num_batches
+    avg_mae = mae_sum / num_batches
+    avg_mape = mape_sum / num_batches
+    avg_rmse = rmse_sum / num_batches
 
-        loss = masked_mae(y_hat, y, 0.0)
-        return y_hat, y, loss
+    print(f"Average Test Loss: {avg_loss:.4f}")
+    print(f"Average MAE: {avg_mae:.4f}")
+    print(f"Average MAPE: {avg_mape:.4f}%")
+    print(f"Average RMSE: {avg_rmse:.4f}")
+    wandb.log({"test_loss": avg_loss, "mae_avg": avg_mae, "mape_avg": avg_mape, "rmse_avg": avg_rmse})
 
-    def training_step(self, batch, batch_idx):
-        y_hat, y, loss = self._run_model(batch)
-        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        return loss
-
-    def validation_step(self, batch, batch_idx):
-        y_hat, y, loss = self._run_model(batch)
-        self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-
-    def test_step(self, batch, batch_idx):
-        y_hat, y, loss = self._run_model(batch)
-        # print(f"y_hat: {y_hat},y{y}")
-        self.metric_lightning(y_hat.cpu(), y.cpu())
-
-        self.log('test_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-
-    def on_test_epoch_end(self):
-        test_metric_dict = self.metric_lightning.compute()
-        self.log_dict(test_metric_dict)
-
-    def configure_optimizers(self):
-        return Adam(self.parameters(), lr=config['train']['lr'], weight_decay=config['train']['weight_decay'])
-
-
-
-
-
+    return avg_loss, avg_mae, avg_mape, avg_rmse
 def main():
+    # Data loaders setup
+    train_loader = AccidentDataLoader(train_set, config['train']['batch_size'], True, 16, True, True)
+    val_loader = AccidentDataLoader(val_set, config['train']['batch_size'], False, 16, True, True)
+    test_loader = AccidentDataLoader(test_set, config['train']['batch_size'], False, 16, True, True)
 
-    fusiongraph = FusionGraphModel(graph, gpu_id, config['graph'], config['data'], config['train']['M'], config['train']['d'], config['train']['bn_decay'])
-    fusiongraph = fusiongraph.to(device)
+    # Initialize model and optimizer
+    fusiongraph = FusionGraphModel(graph, config['server']['gpu_id'], config['graph'], config['data'],
+                                   config['train']['M'], config['train']['d'], config['train']['bn_decay'])
+    model = AccidentModel(train_set.scaler, fusiongraph).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=config['train']['lr'], weight_decay=config['train']['weight_decay'])
 
-    lightning_data = LightningData(train_set, val_set, test_set)
+    # Training and validation loop
+    for epoch in range(config['train']['epochs']):
+        train_loss = train_model(model, train_loader, optimizer)
+        val_loss = validate_model(model, val_loader)
+        print(
+            f"Epoch {epoch + 1}/{config['train']['epochs']}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}")
+        wandb.log({"epoch": epoch, "train_loss_epoch": train_loss, "val_loss_epoch": val_loss})
 
-    lightning_model = LightningModel(scaler, fusiongraph)
-    lightning_model.to(device)
-
-    trainer = Trainer(
-        logger=wandb_logger,
-
-        accelerator='gpu',  # 指定使用 GPU
-        devices=1,  # 指定使用 1 个设备
-        max_epochs=config['train']['epoch'],
-        # TODO
-        # precision=16,
-    )
-
-    trainer.fit(lightning_model, lightning_data)
-    trainer.test(lightning_model, datamodule=lightning_data)
-
-    # 打印使用的图和数据配置
-    print('Graph USE', config['graph']['use'])
-    print('Data', config['data'])
+    # Test phase
+    test_loss, mae_avg, mape_avg, rmse_avg = test_model(model, test_loader)
+    print(
+        f"Final Test Metrics - Loss: {test_loss:.4f}, MAE: {mae_avg:.4f}, MAPE: {mape_avg:.4f}%, RMSE: {rmse_avg:.4f}")
 
 
 if __name__ == '__main__':

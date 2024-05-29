@@ -22,13 +22,13 @@ class AccidentGraph():
 
 
 
-        self.A_road = torch.from_numpy(np.float32(np.load(os.path.join(graph_dir, 'Chicago_road.npy')))).to(device)
-        self.A_closeness = torch.from_numpy(np.float32(np.load(os.path.join(graph_dir, 'Chicago_closeness.npy')))).to(device)
-        self.A_pro = torch.from_numpy(np.float32(np.load(os.path.join(graph_dir, 'Chicago_propagation_graph.npy')))).to(device)
-        self.A_pro =  self.A_pro.unsqueeze(0).unsqueeze(0)  # 现在 X3 的形状是 [1, 1, 16, 16]
+        self.A_road = torch.from_numpy(np.float32(np.load(os.path.join(graph_dir, 'NYC_road.npy')))).to(device)
+        self.A_closeness = torch.from_numpy(np.float32(np.load(os.path.join(graph_dir, 'NYC_closeness.npy')))).to(device)
+        self.A_pro = torch.from_numpy(np.float32(np.load(os.path.join(graph_dir, 'NYC_propagation_graph.npy')))).to(device)
+        self.A_pro =  self.A_pro.unsqueeze(0).unsqueeze(0)
 
         # 使用双线性插值上采样 X3
-        self.A_pro = torch.nn.functional.interpolate( self.A_pro, size=(77, 77), mode='bilinear', align_corners=False)
+        self.A_pro = torch.nn.functional.interpolate(self.A_pro, size=(263, 263), mode='bilinear', align_corners=False)
 
 
         self.A_pro =  self.A_pro.squeeze(0).squeeze(0)
@@ -46,9 +46,9 @@ class AccidentGraph():
 
     def get_fix_weight(self):
         return (
-               self.A_road * 0.2 + \
-               self.A_closeness * 0.2 + \
-               self.A_pro * 0.6) / 3
+               self.A_road * 0.1 + \
+               self.A_closeness * 0.5 + \
+               self.A_pro * 0.4) / 3
 
     def get_graph(self, name):
         if name == 'road':
@@ -121,7 +121,7 @@ class Accident(data.Dataset):
         return self.x[index], self.y[index]
 
 if __name__ == '__main__':
-    graph_dir = 'data/Chicago'
+    graph_dir = 'data/NYC'
     config_graph = {
         'use': ['road', 'closeness', 'pro'],
         'fix_weight': True
@@ -129,7 +129,7 @@ if __name__ == '__main__':
     gpu_id = 0
     graph = AccidentGraph(graph_dir, config_graph, gpu_id)
 
-    data_dir = 'data/temporal_data/Chicago'
+    data_dir = 'data/temporal_data/NYC'
     for data_type in ['train', 'val', 'test']:
         file_path = os.path.join(data_dir, f"{data_type}.npz")
         with np.load(file_path, allow_pickle=True) as data:

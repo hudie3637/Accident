@@ -34,13 +34,13 @@ def generate_graph_seq2seq_io_data(
 
     # Add the time of day feature if required
     if add_time_in_day:
-        time_ind = (df['Trip Start Timestamp'].dt.hour + df['Trip Start Timestamp'].dt.minute / 60.0)
+        time_ind = (df['tpep_pickup_datetime'].dt.hour + df['tpep_pickup_datetime'].dt.minute / 60.0)
         time_in_day = np.tile(time_ind.values, [1, 1]).T
         feature_list.append(time_in_day)
 
     # Add the day of the week feature if required
     if add_day_in_week:
-        dow = df['Trip Start Timestamp'].dt.dayofweek
+        dow = df['tpep_pickup_datetime'].dt.dayofweek
         dow_tiled = np.tile(dow.values, [1, 1]).T
         feature_list.append(dow_tiled)
 
@@ -61,45 +61,65 @@ def generate_graph_seq2seq_io_data(
 
 def generate_train_val_test(args):
     seq_length_x, seq_length_y = args.seq_length_x, args.seq_length_y
-    column_names = ['Trip Start Timestamp', 'Trip End Timestamp', 'Trip Seconds', 'Trip Miles',
-                    'Pickup Community Area']
+    column_names = ['tpep_pickup_datetime', 'tpep_dropoff_datetime', 'trip_distance',
+                    'PULocationID']
     df = pd.read_csv(args.traffic_df_filename, usecols=column_names)
-    # Converting timestamp columns to datetime
-    df['Trip Start Timestamp'] = pd.to_datetime(df['Trip Start Timestamp'], errors='coerce')
-    df['Trip End Timestamp'] = pd.to_datetime(df['Trip End Timestamp'], errors='coerce')
 
-    # Filtering data for valid entries
-    df = df.dropna(subset=['Trip Miles', 'Trip Seconds'])
-    df = df[(df['Trip Miles'] > 0) & (df['Trip Seconds'] > 0)]
+    # 将时间列转换为 datetime 类型并设置为索引
+    df['tpep_pickup_datetime'] = pd.to_datetime(df['tpep_pickup_datetime'], format='%Y/%m/%d %H:%M')
+    # traffic_df.set_index('tpep_pickup_datetime', inplace=True)
+    df['tpep_dropoff_datetime'] = pd.to_datetime(df['tpep_dropoff_datetime'], format='%Y/%m/%d %H:%M')
+    # 清洗数据
+    df = df.dropna(subset=['trip_distance'])
+    df = df[(df['trip_distance'] > 0)]
+    # print(traffic_df.columns)
+    # 计算时间差（秒）
+    df['Trip Seconds'] = (df['tpep_dropoff_datetime'] - df['tpep_pickup_datetime']).dt.total_seconds()
+    df.set_index('tpep_pickup_datetime', inplace=True)
 
-    # Calculating speed
-    df['Trip Miles_km'] = df['Trip Miles'] * 1.60934  # converting miles to km
-    df['Trip Seconds_h'] = df['Trip Seconds'] / 3600  # converting seconds to hours
-    df['Speed'] = df['Trip Miles_km'] / df['Trip Seconds_h']
+    # 确保 'Trip Seconds' 列不包含 NaN 或负值
+    df = df[df['Trip Seconds'] > 0]
 
-    # Filtering out unreasonable speed values
-    reasonable_speed_threshold = 200
-    df = df[df['Speed'] <= reasonable_speed_threshold]
+    # 计算速度（公里/小时）
+    df['Speed'] = df['trip_distance'] * 1.60934 / (df['Trip Seconds'] / 3600)
 
-    # Creating time ranges for each trip
-    df['Time Points'] = df.apply(lambda row: pd.date_range(start=row['Trip Start Timestamp'],
-                                                           end=row['Trip End Timestamp'],
-                                                           freq='15T'), axis=1)
+    df = df[df['Speed'] <= 200]  # 过滤异常速度值
 
-    # Expanding DataFrame to have one row per time point
+    # 定义函数生成时间点范围
+    def generate_time_range(row):
+        start = row.name  # 使用row.name来获取索引的日期时间
+        end = row['tpep_dropoff_datetime']
+        return pd.date_range(start=start,
+                             end=end,
+                             freq='5T')  # 5分钟间隔
+
+    # 对每个行程生成时间点范围
+    df['Time Points'] = df.apply(lambda row: pd.date_range(start=row.name,
+                                                           end=row['tpep_dropoff_datetime'],
+                                                           freq='5T'), axis=1)
+    # 将DataFrame展开为长格式，每个时间点一行
     expanded_df = df.explode('Time Points')
+
+    # 提取时间点的日期和小时
     expanded_df['Time Point Date'] = expanded_df['Time Points'].dt.date
     expanded_df['Time Point Hour'] = expanded_df['Time Points'].dt.hour
     expanded_df['Time Point Minute'] = expanded_df['Time Points'].dt.minute
 
-    # Aggregating by average speed per community area and time point
-    result_df = expanded_df.groupby(
-        ['Time Point Date', 'Time Point Hour', 'Time Point Minute', 'Pickup Community Area']).agg(
+    # 使用 'Pickup Community Area' 作为区域信息
+    result_df = expanded_df[
+        ['Time Points', 'Time Point Date', 'Time Point Hour', 'Time Point Minute', 'PULocationID', 'Speed']
+    ]
+
+    # 聚合处理重复项，确保唯一
+    aggregated_df = result_df.groupby(
+        ['Time Points', 'Time Point Date', 'Time Point Hour', 'Time Point Minute', 'PULocationID']).agg(
         {'Speed': 'mean'}).reset_index()
 
-    # Pivoting the DataFrame
-    final_df = result_df.pivot_table(index=['Time Point Date', 'Time Point Hour', 'Time Point Minute'],
-                                     columns='Pickup Community Area', values='Speed', fill_value=0)
+    # 将数据转换为每行一个时间点，每列一个区域的DataFrame
+    final_df = aggregated_df.pivot_table(index=['Time Point Date', 'Time Point Hour', 'Time Point Minute'],
+                                         columns='PULocationID',
+                                         values='Speed',
+                                         fill_value=0)
 
     # Function to fill zeros with the mean of the previous day
     def fill_with_previous_day_mean(df):
@@ -124,6 +144,7 @@ def generate_train_val_test(args):
 
     # Preparing the data array for predictions
     df_array = final_df.values
+    # 假设 df 是您的 DataFrame
 
     x_offsets = np.sort(np.concatenate((np.arange(-(seq_length_x - 1), 1, 1),)))
     # Predict the next one hour
@@ -138,7 +159,7 @@ def generate_train_val_test(args):
         df_array,
         x_offsets=x_offsets,
         y_offsets=y_offsets,
-        add_time_in_day=False,
+        add_time_in_day=True,
         add_day_in_week=args.dow,
     )
 
@@ -177,8 +198,8 @@ def generate_train_val_test(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output_dir", type=str, default="data/temporal_data/Chicago", help="Output directory.")
-    parser.add_argument("--traffic_df_filename", type=str, default="data/Chicago/2016_traffic/Taxi_Trips.csv", help="Raw traffic readings.",)
+    parser.add_argument("--output_dir", type=str, default="data/temporal_data/NYC", help="Output directory.")
+    parser.add_argument("--traffic_df_filename", type=str, default="data/NYC/2016_traffic/yellow_tripdata_2016-08.csv", help="Raw traffic readings.",)
     parser.add_argument("--seq_length_x", type=int, default=24, help="Sequence Length.",)
     parser.add_argument("--seq_length_y", type=int, default=24, help="Sequence Length.",)
     parser.add_argument("--y_start", type=int, default=1, help="Y pred start", )

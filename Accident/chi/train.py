@@ -19,12 +19,15 @@ sys.path.append(PROJ_DIR)
 # Import utility functions
 from util import *
 
+# Weights & Biases setup
+api_key = "6904b03128d41d459604351aa46ecd82866be0a8"
+wandb.login(key=api_key)
 
 # Configuration dictionary
 config = {
     'server': {'gpu_id': 0},
     'graph': {
-        'use': ['road', 'closeness','pro'],
+        'use': ['road', 'closeness'],
         'fix_weight': False,
         'matrix_weight': True,
         'attention': True
@@ -37,10 +40,10 @@ config = {
         'hidden_size': 128
     },
     'train': {
-        'seed': 0,
-        'epochs': 50,
-        'batch_size': 16,
-        'lr': 1e-4,
+        'seed': 10,
+        'epochs': 100,
+        'batch_size': 64,
+        'lr': 1e-3,
         'weight_decay': 1e-4,
         'M': 24,
         'd': 6,
@@ -48,23 +51,26 @@ config = {
     }
 }
 
-#
-# pl.utilities.seed.seed_everything(config['train']['seed'])
+# Initialize WandB
+wandb.init(project='accident_analysis', config=config)
+config = wandb.config
 
-gpu_id = config['server']['gpu_id']
-device = 'cuda:%d' % gpu_id if torch.cuda.is_available() else 'cpu'
+# Training device setup
+device = torch.device(f"cuda:{config['server']['gpu_id']}" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(config['train']['seed'])
 
+# Setup data directories
 root_dir = 'data'
-data_dir = os.path.join(root_dir, 'temporal_data/NYC')
-graph_dir = os.path.join(root_dir, 'NYC')
+chi_data_dir = os.path.join(root_dir, 'temporal_data/Chicago')
+chi_graph_dir = os.path.join(root_dir, 'Chicago')
 
-train_set = Accident(data_dir, 'train')
-val_set = Accident(data_dir, 'val')
-test_set = Accident(data_dir, 'test')
+# Load datasets
+train_set = Accident(chi_data_dir, 'train')
+val_set = Accident(chi_data_dir, 'val')
+test_set = Accident(chi_data_dir, 'test')
 
-graph = AccidentGraph(graph_dir, config['graph'], gpu_id)
-
+# Setup graph
+graph = AccidentGraph(chi_graph_dir, config['graph'], config['server']['gpu_id'])
 
 # DataLoader class
 class AccidentDataLoader:
@@ -130,6 +136,7 @@ def train_model(model, train_loader, optimizer):
         loss.backward()
         optimizer.step()
         total_loss += loss.item()
+        wandb.log({"train_loss": loss.item()})
     return total_loss / len(train_loader)
 
 # Validation function
@@ -144,6 +151,7 @@ def validate_model(model, val_loader):
             y_hat = model(x)
             loss = model.loss(y_hat, y)
             total_loss += loss.item()
+            wandb.log({"val_loss": loss.item()})
     return total_loss / len(val_loader)
 def test_model(model, test_loader):
     model.eval()
@@ -177,6 +185,7 @@ def test_model(model, test_loader):
     print(f"Average MAE: {avg_mae:.4f}")
     print(f"Average MAPE: {avg_mape:.4f}%")
     print(f"Average RMSE: {avg_rmse:.4f}")
+    wandb.log({"test_loss": avg_loss, "mae_avg": avg_mae, "mape_avg": avg_mape, "rmse_avg": avg_rmse})
 
     return avg_loss, avg_mae, avg_mape, avg_rmse
 def main():
@@ -197,6 +206,7 @@ def main():
         val_loss = validate_model(model, val_loader)
         print(
             f"Epoch {epoch + 1}/{config['train']['epochs']}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}")
+        wandb.log({"epoch": epoch, "train_loss_epoch": train_loss, "val_loss_epoch": val_loss})
 
     # Test phase
     test_loss, mae_avg, mape_avg, rmse_avg = test_model(model, test_loader)

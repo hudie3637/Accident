@@ -20,6 +20,7 @@ class linear(nn.Module):
 
     def forward(self, x):
         x = x.to(self.device)
+
         return self.mlp(x)
 
 
@@ -83,7 +84,6 @@ class FC(nn.Module):
         return x
 
 
-
 class GEmbedding(nn.Module):
     """
     multi-graph spatial embedding
@@ -139,14 +139,13 @@ class spatialAttention(nn.Module):
                      bn_decay=bn_decay)
 
     def forward(self, X, GE):
-
-
         num_vertex = X.shape[0]
         X = torch.cat((X, GE), dim=-1)
+        # [num_vertices, num_graphs, num_vertices, 2 * D]
 
         query = self.FC_q(X)
         key = self.FC_k(X)
-        value = self.FC_v(X)
+        value = self.FC_v(X)  # [M * num_vertices, num_graphs, num_vertices, d]
 
         query = torch.cat(torch.split(query, self.M, dim=-1), dim=0)
         key = torch.cat(torch.split(key, self.M, dim=-1), dim=0)
@@ -159,10 +158,7 @@ class spatialAttention(nn.Module):
         X = torch.matmul(attention, value)
         X = torch.cat(torch.split(X, num_vertex, dim=0), dim=-1)
         X = self.FC(X)
-
-        del query, key, value, attention  # explicitly delete tensors to free memory
-        torch.cuda.empty_cache()  # clear unused memory
-
+        del query, key, value, attention
         return X
 
 
@@ -192,8 +188,9 @@ class graphAttention(nn.Module):
                      bn_decay=bn_decay)
 
     def forward(self, X, SGE):
-        num_vertex = X.shape[0]
+        num_vertex_ = X.shape[0]
         X = torch.cat((X, SGE), dim=-1)
+        # [num_vertices, num_graphs, num_vertices, 2 * D]
 
         query = self.FC_q(X)
         key = self.FC_k(X)
@@ -202,22 +199,32 @@ class graphAttention(nn.Module):
         query = torch.cat(torch.split(query, self.M, dim=-1), dim=0)
         key = torch.cat(torch.split(key, self.M, dim=-1), dim=0)
         value = torch.cat(torch.split(value, self.M, dim=-1), dim=0)
+        # [M * num_vertices, num_graphs, num_vertices, d]
 
-        attention = torch.matmul(query, key.transpose(2, 3))
+        query = query.permute(0, 2, 1, 3)
+        key = key.permute(0, 2, 3, 1)
+        value = value.permute(0, 2, 1, 3)
+
+        attention = torch.matmul(query, key)
         attention /= (self.d ** 0.5)
 
         if self.mask:
-            mask = torch.tril(torch.ones(num_vertex, num_vertex, device=X.device))
-            attention = attention.masked_fill(mask == 0, float('-inf'))
+            num_vertex = X.shape[0]
+            num_step = X.shape[1]
+            mask = torch.ones(num_step, num_step)
+            mask = torch.tril(mask)
+            mask = torch.unsqueeze(torch.unsqueeze(mask, dim=0), dim=0)
+            mask = mask.repeat(self.K * num_vertex, num_vertex, 1, 1)
+            mask = mask.to(torch.bool)
+            attention = torch.where(mask, attention, -2 ** 15 + 1)
 
         attention = F.softmax(attention, dim=-1)
+
         X = torch.matmul(attention, value)
-        X = torch.cat(torch.split(X, num_vertex, dim=0), dim=-1)
+        X = X.permute(0, 2, 1, 3)
+        X = torch.cat(torch.split(X, num_vertex_, dim=0), dim=-1)
         X = self.FC(X)
-
-
-        del query, key, value, attention  # explicitly delete tensors to free memory
-        torch.cuda.empty_cache()  # clear unused memory
+        del query, key, value, attention
         return X
 
 
@@ -242,9 +249,10 @@ class gatedFusion(nn.Module):
     def forward(self, HS, HG):
         XS = self.FC_xs(HS)
         XG = self.FC_xt(HG)
-        z = torch.sigmoid(XS + XG)
-        H = (z * HS) + ((1 - z) * HG)
+        z = torch.sigmoid(torch.add(XS, XG))
+        H = torch.add(torch.mul(z, HS), torch.mul(1 - z, HG))
         H = self.FC_h(H)
+        del XS, XG, z
         return H
 
 
@@ -288,7 +296,8 @@ class FusionGraphModel(nn.Module):
         self.attention = conf_graph['attention']
         # attention: if True, the SG-ATT is used.
         self.task = conf_data['type']
-        device = 'cuda:%d' % gpu_id
+
+        device = 'cuda:%d' % gpu_id if torch.cuda.is_available() else 'cpu'
 
         if self.graph.graph_num == 1:
             self.fusion_graph = False
@@ -304,7 +313,8 @@ class FusionGraphModel(nn.Module):
                 self.linear = linear(5, 1)
 
             else:
-                adj_w = nn.Parameter(torch.randn(1, self.graph.graph_num).to(self.device))
+                adj_w = nn.Parameter(torch.randn(1, self.graph.graph_num))
+
             self.adj_w = nn.Parameter(adj_w.to(device), requires_grad=True)
             self.used_graphs = self.graph.get_used_graphs()
             assert len(self.used_graphs) == self.graph.graph_num
@@ -324,16 +334,9 @@ class FusionGraphModel(nn.Module):
                 if self.attention:
                     W = torch.stack((self.used_graphs))
                     GE = W[:, :, 0].permute(1, 0).unsqueeze(dim=2)
-
-
-                    GE = GE.to(self.device)  # 确保 GE 在正确的设备上
                     # generate graph embbeding
 
-                    # print("Device after to():", GE.device)
-
                     GE = self.GEmbedding(GE)
-                    # print("Device after GEmbedding:", GE.device)
-
                     W = self.FC_1(torch.unsqueeze(W.permute(1, 0, 2), -1))
                     W = self.SG_ATT(W, GE)
                     # multi-graph spatial attention
@@ -368,9 +371,9 @@ if __name__ == '__main__':
         },
         'fusion': {
             'intra_M': 2,
-            'intra_d': 24,
+            'intra_d': 256,
             'inter_M': 2,
-            'inter_d': 24,
+            'inter_d': 256,
             'bn_decay': 0.1
         },
         'graph': {
@@ -380,19 +383,19 @@ if __name__ == '__main__':
             'attention': True
         },
         'data': {
-            'in_dim': 1,
-            'out_dim': 1,
+            'in_dim': 3,
+            'out_dim': 3,
             'hist_len': 24,
             'pred_len': 24,
-            'type': 'NYC',
+            'type': 'chi',
         }
     }
 
     gpu_id = config['server']['gpu_id']
     # 加载图数据
-    road_graph = np.load('data/NYC/NYC_road.npy')
-    closeness_graph = np.load('data/NYC/NYC_closeness.npy')
-    propagation_graph = np.load('data/NYC/NYC_propagation_graph.npy')
+    road_graph = np.load('data/Chicago/Chicago_road.npy')
+    closeness_graph = np.load('data/Chicago/Chicago_closeness.npy')
+    propagation_graph = np.load('data/Chicago/Chicago_propagation_graph.npy')
     # 打印图数据的形状以进行调试
     print(f"Road graph shape: {road_graph.shape}")
     print(f"Closeness graph shape: {closeness_graph.shape}")
@@ -409,15 +412,15 @@ if __name__ == '__main__':
     X3 = torch.nn.functional.interpolate(X3, size=(X1.size(0), X1.size(1)), mode='bilinear', align_corners=False)
 
     # 移除不必要的维度，以匹配 X1 和 X2 的形状
-    X3 = X3.squeeze(0).squeeze(0)
+    X3 = X3.squeeze(0).squeeze(0)  # 现在 X3_upsampled 的形状是 [77, 77]
     #得到多图的嵌入
 
     print(f"X1: {X1.shape}")
     print(f"X2 : {X2.shape }")
     print(f"X3: {X3.shape}")
     root_dir = 'data'
-    chi_data_dir = os.path.join(root_dir, 'temporal_data/NYC')
-    chi_graph_dir = os.path.join(root_dir, 'NYC')
+    chi_data_dir = os.path.join(root_dir, 'temporal_data/Chicago')
+    chi_graph_dir = os.path.join(root_dir, 'Chicago')
     train_set = Accident(chi_data_dir, 'train')
     val_set = Accident(chi_data_dir, 'val')
     test_set = Accident(chi_data_dir, 'test')
@@ -437,7 +440,6 @@ if __name__ == '__main__':
     )
 
     GE = torch.randn(X1.size(0), 3, 1)
-    GE = GE.to(fusiongraph.device)
 
     # 调用模型的 forward 方法进行计算
     # 注意：这里的 X 是模型需要的输入，根据您的模型定义，您可能需要修改这个部分

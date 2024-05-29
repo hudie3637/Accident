@@ -73,7 +73,6 @@ def masked_mape(preds, labels, null_val=np.nan):
 
     return mean_loss
 
-
 def metric(pred, real):
     # 确保 pred 和 real 的尺寸一致
     # print(f'pred {pred.shape},real {real.shape}')
